@@ -1,0 +1,13 @@
+import os
+from dotenv import load_dotenv
+
+load_dotenv()
+
+class Settings:
+    GITHUB_APP_ID = os.getenv("GITHUB_APP_ID")
+    GITHUB_APP_PRIVATE_KEY = os.getenv("GITHUB_APP_PRIVATE_KEY")
+    WEBHOOK_SECRET = os.getenv("WEBHOOK_SECRET")
+    MODEL_SERVICE_URL = os.getenv("MODEL_SERVICE_URL")
+    DATABASE_URL = os.getenv("DATABASE_URL")
+
+settings = Settings()
