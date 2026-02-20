@@ -6,3 +6,4 @@ PyJWT
 cryptography
 sqlalchemy
 alembic
+python-jose[cryptography]

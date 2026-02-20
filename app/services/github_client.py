@@ -31,11 +31,17 @@ def get_installation_token(installation_id: str):
         headers=headers,
     )
 
-    return res.json()["token"]
+    data = res.json()
+
+    if "token" not in data:
+        print("GitHub token error:", data)
+        raise Exception(f"Failed to get installation token: {data}")
+
+    return data["token"]
 
 def get_installation_repos(installation_id):
 
-    token =get_installation_token(installation_id)
+    token = get_installation_token(installation_id)
     url = "https://api.github.com/installation/repositories"
 
     res = requests.get(

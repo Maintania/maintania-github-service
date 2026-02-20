@@ -1,4 +1,4 @@
-from sqlalchemy import Column, Integer, String, Boolean, ForeignKey
+from sqlalchemy import Column, DateTime, Integer, String, Boolean, ForeignKey, func
 from sqlalchemy.orm import relationship
 from app.db.base import Base
 
@@ -15,6 +15,8 @@ class Repository(Base):
 
     # Foreign key linking to installation
     installation_id = Column(Integer, ForeignKey("installations.id"))
+    created_at = Column(DateTime(timezone=True),server_default=func.now(),nullable=False)
+    updated_at = Column(DateTime(timezone=True),server_default=func.now(),onupdate=func.now(),nullable=False)
 
     # Relationship back to installation
     installation = relationship("Installation", back_populates="repositories")
