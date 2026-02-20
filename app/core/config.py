@@ -12,5 +12,6 @@ class Settings:
     WEBHOOK_SECRET = os.getenv("WEBHOOK_SECRET")
     MODEL_SERVICE_URL = os.getenv("MODEL_SERVICE_URL")
     DATABASE_URL = os.getenv("DATABASE_URL")
+    FRONTEND_URL = os.getenv("FRONTEND_URL")
 
 settings = Settings()

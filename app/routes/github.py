@@ -1,6 +1,7 @@
 from fastapi import APIRouter, Depends, HTTPException, Request
 from sqlalchemy.orm import Session
 from starlette.responses import RedirectResponse
+from app.core.config import settings
 from app.db.session import get_db
 from app.dependencies.auth import get_current_user
 from app.models.installation import Installation
@@ -25,7 +26,7 @@ def github_setup(installation_id: str, user = Depends(get_current_user), db: Ses
         db.add(installation)
         db.commit()
     sync_repositories(db, installation)
-    return RedirectResponse("http://localhost:3000/dashboard")
+    return RedirectResponse(f"{settings.FRONTEND_URL}/dashboard")
 
 # get installation id from github callback query 
 @router.post("/webhook")

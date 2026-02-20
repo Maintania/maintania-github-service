@@ -3,7 +3,7 @@ import requests
 from sqlalchemy.orm import Session
 from starlette.responses import JSONResponse, RedirectResponse
 
-from app.core.config import settings
+from app.core.config import  settings
 from app.core.security import create_access_token
 from app.db.session import get_db
 from app.dependencies.auth import get_current_user
@@ -78,7 +78,7 @@ async def callback(code: str, db: Session= Depends(get_db)):
 
     token = create_access_token({"user_id": user.id})
 
-    response = RedirectResponse("http://localhost:3000/dashboard")
+    response = RedirectResponse(f"{settings.FRONTEND_URL}/dashboard")
     response.set_cookie("session", token, httponly=True)
 
     return response
