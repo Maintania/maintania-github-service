@@ -1,5 +1,5 @@
 from fastapi import Depends, HTTPException, Request
-from jose import JWTError, jwt
+import jwt
 from sqlalchemy.orm import Session
 
 
@@ -24,7 +24,7 @@ def get_current_user(request: Request, db: Session = Depends(get_db)):
         if not user_id:
             raise HTTPException(status_code=401, detail="Invalid token")
 
-    except JWTError:
+    except :
         raise HTTPException(status_code=401, detail="Invalid token")
 
     user = db.query(User).filter(User.id == user_id).first()
