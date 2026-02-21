@@ -33,8 +33,9 @@ def logout():
 
     response.delete_cookie(
         key="session",
-        httponly=True,
-        samesite="lax"
+    path="/",
+    secure=True,
+    samesite="none"
     )
 
     return response
@@ -81,11 +82,12 @@ async def callback(code: str, db: Session= Depends(get_db)):
     response = RedirectResponse(f"{settings.FRONTEND_URL}/dashboard")
     response.set_cookie(
         key="session",
-        value=token,
-        httponly=True,
-        secure=True,
-        samesite="none",
-        domain="maintania-backend.onrender.com"
+    value=token,
+    httponly=True,
+    secure=True,
+    samesite="none",
+    path="/",
+    max_age=60*60*24
         )
 
     return response
