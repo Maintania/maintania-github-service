@@ -21,21 +21,20 @@ def generate_jwt():
 def get_installation_token(installation_id: str):
     jwt_token = generate_jwt()
 
-    headers = {
-        "Authorization": f"Bearer {jwt_token}",
-        "Accept": "application/vnd.github+json",
-    }
-
     res = requests.post(
         f"https://api.github.com/app/installations/{installation_id}/access_tokens",
-        headers=headers,
+        headers={
+            "Authorization": f"Bearer {jwt_token}",
+            "Accept": "application/vnd.github+json",
+        },
     )
 
     data = res.json()
 
+    print("GitHub token response:", data)
+
     if "token" not in data:
-        print("GitHub token error:", data)
-        raise Exception(f"Failed to get installation token: {data}")
+        raise Exception(f"GitHub token error: {data}")
 
     return data["token"]
 
