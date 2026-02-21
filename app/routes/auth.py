@@ -79,7 +79,14 @@ async def callback(code: str, db: Session= Depends(get_db)):
     token = create_access_token({"user_id": user.id})
 
     response = RedirectResponse(f"{settings.FRONTEND_URL}/dashboard")
-    response.set_cookie("session", token, httponly=True)
+    response.set_cookie(
+        key="session",
+        value=token,
+        httponly=True,
+        secure=True,
+        samesite="none",
+        domain="maintania-backend.onrender.com"
+        )
 
     return response
 
