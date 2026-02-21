@@ -37,43 +37,65 @@ async def github_webhook(request: Request, db: Session = Depends(get_db)):
 
     if event == "installation":
 
-        installation = payload["installation"]
+        action = payload.get("action")
+        installation = payload.get("installation")
 
         installation_id = str(installation["id"])
         account_login = installation["account"]["login"]
         account_type = installation["account"]["type"]
 
-        existing = db.query(Installation).filter(
-            Installation.installation_id == installation_id
-        ).first()
+        if action == "created":
 
-        if existing:
-            existing.account_login = account_login
-            existing.account_type = account_type
-        else:
-            new_installation = Installation(
-                installation_id=installation_id,
-                account_login=account_login,
-                account_type=account_type
-            )
-            db.add(new_installation)
+            existing = db.query(Installation).filter(
+                Installation.installation_id == installation_id
+            ).first()
+
+            if not existing:
+                new_installation = Installation(
+                    installation_id=installation_id,
+                    account_login=account_login,
+                    account_type=account_type
+                )
+                db.add(new_installation)
+
+        elif action == "deleted":
+
+            db.query(Installation).filter(
+                Installation.installation_id == installation_id
+            ).delete()
+
+        elif action == "suspend":
+            print("Installation suspended:", installation_id)
+
+        elif action == "unsuspend":
+            print("Installation unsuspended:", installation_id)
 
         db.commit()
 
-    elif event == "issues" and payload.get("action") == "opened":
+    elif event == "installation_repositories":
 
-        installation_id = payload["installation"]["id"]
-        issue_number = payload["issue"]["number"]
-        repo_name = payload["repository"]["name"]
-        owner = payload["repository"]["owner"]["login"]
+        action = payload.get("action")
+        installation_id = str(payload["installation"]["id"])
 
-        comment_on_issue(
-            installation_id,
-            owner,
-            repo_name,
-            issue_number,
-            "Issue received 👀 Maintania will analyze this."
-        )
+        print("Repo change detected:", action, installation_id)
+    elif event == "issues":
+
+        action = payload.get("action")
+
+        if action == "opened":
+
+            installation_id = payload["installation"]["id"]
+            issue_number = payload["issue"]["number"]
+            repo_name = payload["repository"]["name"]
+            owner = payload["repository"]["owner"]["login"]
+
+            comment_on_issue(
+                installation_id,
+                owner,
+                repo_name,
+                issue_number,
+                "Issue received 👀 Maintania will analyze this."
+            )
 
     return {"ok": True}
 
