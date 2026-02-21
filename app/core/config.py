@@ -13,5 +13,6 @@ class Settings:
     MODEL_SERVICE_URL = os.getenv("MODEL_SERVICE_URL")
     DATABASE_URL = os.getenv("DATABASE_URL")
     FRONTEND_URL = os.getenv("FRONTEND_URL")
+    JWT_SECRET_KEY = os.getenv("JWT_SECRET_KEY")
 
 settings = Settings()

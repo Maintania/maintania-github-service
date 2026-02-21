@@ -5,8 +5,8 @@ from sqlalchemy.orm import Session
 
 from app.db.session import get_db
 from app.models.user import User
+from app.core.config import settings
 
-SECRET_KEY = "supersecret"
 ALGORITHM = "HS256"
 
 
@@ -18,7 +18,7 @@ def get_current_user(request: Request, db: Session = Depends(get_db)):
         raise HTTPException(status_code=401, detail="Not authenticated")
 
     try:
-        payload = jwt.decode(token, SECRET_KEY, algorithms=[ALGORITHM])
+        payload = jwt.decode(token, settings.SECRET_KEY, algorithms=[ALGORITHM])
         user_id = payload.get("user_id")
 
         if not user_id:
