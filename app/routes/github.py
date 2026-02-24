@@ -5,6 +5,7 @@ from app.core.config import settings
 from app.db.session import get_db
 from app.dependencies.auth import get_current_user
 from app.models.installation import Installation
+from app.models.repository import Repository
 from app.services.github_client import comment_on_issue, get_installation_repos
 from app.services.repository_service import sync_repositories
 
@@ -33,6 +34,7 @@ def github_setup(installation_id: str, user = Depends(get_current_user), db: Ses
 async def github_webhook(request: Request, db: Session = Depends(get_db)):
 
     payload = await request.json()
+    print("payload",payload)
     event = request.headers.get("X-GitHub-Event")
 
     if event == "installation":
@@ -60,6 +62,10 @@ async def github_webhook(request: Request, db: Session = Depends(get_db)):
 
         elif action == "deleted":
 
+            db.query(Repository).filter(
+                Repository.installation_id == installation_id
+            ).delete()
+            
             db.query(Installation).filter(
                 Installation.installation_id == installation_id
             ).delete()
