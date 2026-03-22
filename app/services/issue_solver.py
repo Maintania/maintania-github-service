@@ -18,9 +18,6 @@ class RootCauseEngine:
             formatted += "\n"
         return formatted
 
-    def _compress_file_tree(self, tree, max_lines=500):
-        return "\n".join(tree.splitlines()[:max_lines])
-
     def _safe_json_parse(self, text):
         try:
             return json.loads(text)
@@ -42,7 +39,6 @@ class RootCauseEngine:
             }
 
         formatted_context = self._format_context(repo_context)
-        compressed_tree = self._compress_file_tree(file_tree)
 
         prompt = f"""
 You are a senior software maintenance engineer.
@@ -52,16 +48,15 @@ Rules:
 - Do NOT invent files.
 - Only reference files that appear in REPOSITORY CONTEXT.
 - If insufficient data, say so.
+- Provide the suggested code changes in fix_strategy.
 - Return strict JSON only.
+- Keep it concise.
 
 ISSUE TITLE:
 {issue_title}
 
 ISSUE DESCRIPTION:
 {issue_body}
-
-PROJECT STRUCTURE:
-{compressed_tree}
 
 REPOSITORY CONTEXT:
 {formatted_context}

@@ -1,25 +1,29 @@
-from fastapi import APIRouter, Depends, HTTPException, Request
+from fastapi import APIRouter, Depends, HTTPException, Request, Query
 from sqlalchemy.orm import Session
 from starlette.responses import RedirectResponse
 from app.core.config import settings
 from app.db.session import get_db
 from app.dependencies.auth import get_current_user
 from app.models.installation import Installation
+from app.models.repository import *
 from app.services.github_client import *
 from app.services.Issues import *
-
 from app.services.repository_service import sync_repositories
 import jwt
 import time
 import requests
 from typing import Optional
-from pydantic import BaseModel
+from pydantic import BaseModel,Field
 from app.services.labelling import *
 from app.services.repo_cloner import *
 from app.services.issue_solver import *
+from qdrant_client import QdrantClient
+from sentence_transformers import SentenceTransformer
+from qdrant_client.models import Filter, FieldCondition, MatchValue
+from app.services.incremental_indexer import *
 
 
-
+client = QdrantClient("localhost", port=6333)
 
 router = APIRouter()
 
@@ -198,6 +202,192 @@ def call_issues(
 
     return issues[:limit]
 
+
+
+class RepoIndexRequest(BaseModel):
+    owner: str
+    repo: str
+    branch: str | None = None
+    installation_id: int
+    type: str | None = None
+
+
+
+
+@router.post("/index-repository")
+def index_repository(request: RepoIndexRequest):
+
+    engine = RepoIntelligenceEngine()
+
+    owner = request.owner
+    repo = request.repo
+
+    if request.type == "reset":
+        engine.reset_collection()
+        return {
+            "status": "success",
+            "message": "Collection reset"
+        }
+
+    if request.type == "delete":
+
+        if request.branch is None:
+
+            engine.delete_repo(
+                owner=request.owner,
+                repo=request.repo
+            )
+            engine.delete_state(
+                owner=request.owner,
+                repo=request.repo
+            )
+
+            return {
+                "status": "success",
+                "repo": f"{request.owner}/{request.repo}"
+            }
+
+        else:
+
+            engine.delete_repo(
+                owner=request.owner,
+                repo=request.repo,
+                branch=request.branch
+            )
+            engine.delete_repo_state(
+                owner=request.owner,
+                repo=request.repo,
+                branch=request.branch
+            )
+
+            return {
+                "status": "success",
+                "branch": request.branch,
+                "repo": f"{request.owner}/{request.repo}"
+            }
+
+    try:
+
+        start_time = time.time()
+        target_branch = request.branch
+        if not request.branch:
+            branch_name = engine.resolve_branch(
+                owner=request.owner,
+                repo=request.repo,
+                installation_id=request.installation_id,
+                branch=request.branch
+            )
+        else:
+            branch_name = target_branch
+            
+        print("Branch:", branch_name)
+            
+            
+        existing_state = engine.get_repo_state(
+            owner=request.owner,
+            repo=request.repo,
+            branch=branch_name
+        )
+
+        # -----------------------------------
+        # IF EXISTS → CALL SYNC (INCREMENTAL)
+        # -----------------------------------
+        if existing_state and existing_state.get("last_commit"):
+
+            print("Repo already indexed → running incremental sync")
+
+            return sync_repo(SyncRepoPayload(
+                installation_id=request.installation_id,
+                owner=request.owner,
+                repo=request.repo,
+                branch=branch_name
+            ))
+        
+        # Clone repository
+        branch = engine.clone_repo(
+            owner=request.owner,
+            repo=request.repo,
+            installation_id=request.installation_id,
+            branch=branch_name
+        )
+
+        engine.upsert_repo_state(
+            owner=request.owner,
+            repo=request.repo,
+            branch=branch,
+            data={
+                "status": "indexing",
+                "last_update_type": "full",
+                "error": None
+            }
+        )
+
+        # Process and store embeddings
+        stats, success = engine.process_repository(
+            owner=request.owner,
+            repo=request.repo,
+            branch=branch
+        )
+        repo_obj = Repo(engine.repo_root)
+        current_commit = repo_obj.head.commit.hexsha
+
+        engine.upsert_repo_state(
+            owner=request.owner,
+            repo=request.repo,
+            branch=branch,
+            data={
+                "last_commit": current_commit,
+                "total_files": stats["total_files"],
+                "total_chunks": stats["total_chunks"],
+                "languages": stats["languages"],
+                "last_indexed_at": engine._utc_now_iso(),
+                "last_index_duration_sec": stats["duration_sec"],
+                "status": "ready",
+                "last_update_type": "full",
+                "error": None
+            }
+        )
+
+        if not success:
+            raise HTTPException(
+                status_code=400,
+                detail="No supported files found in repository"
+            )
+
+        return {
+            "status": "success",
+            "message": "Repository indexed successfully",
+            "repository": f"{request.owner}/{request.repo}",
+            "branch": branch,
+            "chunks_indexed": stats["total_chunks"],
+            "index_time_seconds": round(time.time() - start_time, 2)
+        }
+
+    except Exception as e:
+
+        if 'branch' in locals():
+            engine.upsert_repo_state(
+                owner=request.owner,
+                repo=request.repo,
+                branch=branch,
+                data={
+                    "status": "failed",
+                    "last_indexed_at": engine._utc_now_iso(),
+                    "last_index_duration_sec": round(time.time() - start_time, 2),
+                    "last_update_type": "full",
+                    "error": str(e)
+                }
+            )
+
+        raise HTTPException(
+            status_code=500,
+            detail=str(e)
+        )
+
+    finally:
+        engine.cleanup()
+
+
 class AnalyzeIssuePayload(BaseModel):
     installation_id: int
     owner: str
@@ -206,70 +396,18 @@ class AnalyzeIssuePayload(BaseModel):
     issue_title: str
     issue_body: Optional[str] = ""
 
-# @router.post("/analyze-issue")
-# def test_maintania_pipeline(
-#     installation_id: int,
-#     owner: str,
-#     repo: str,
-#     issue_number: int,
-#     issue_title: str,
-#     issue_body: Optional[str] = ""
-# ):
-#     """
-#     Manual test endpoint for Maintania AI pipeline.
-#     """
 
-#     try:
-#         # # 1. Post initial comment (same as webhook flow)
-#         # comment_on_issue(
-#         #     installation_id,
-#         #     owner,
-#         #     repo,
-#         #     issue_number,
-#         #     "Issue received 👀 Maintania will analyze this."
-#         # )
-
-#         # 2. Run similarity pipeline
-#         results = maintania_find_similar_fixes(
-#             installation_id=installation_id,
-#             title=issue_title,
-#             body=issue_body,
-#             owner=owner,
-#             repo=repo,
-#             embed_fn=embed_fn,   # your embedding function
-#             top_k=5
-#         )
-
-#         return {
-#             "status": "success",
-#             "issue": {
-#                 "owner": owner,
-#                 "repo": repo,
-#                 "issue_number": issue_number,
-#                 "title": issue_title,
-#             },
-#             "similar_fixes": results
-#         }
-
-#     except Exception as e:
-#         raise HTTPException(status_code=500, detail=str(e))
-    
-    
 @router.post("/analyze-issue")
 def test_maintania_pipeline(payload: AnalyzeIssuePayload):
-    """
-    Manual test endpoint for Maintania AI pipeline.
-    """
+
     # ----------------------------
     # Phase 1 — Issue Classification
     # ----------------------------
+    classification = classify_issue(payload.issue_title, payload.issue_body)
 
-    # classification  = classify_issue(payload.issue_title, payload.issue_body)
-    # print(classification)
     # ----------------------------
-    # Phase 2 — Find Similar Fixes 
+    # Phase 2 — Find Similar Fixes
     # ----------------------------
-
     results = maintania_find_similar_fixes(
         installation_id=payload.installation_id,
         title=payload.issue_title,
@@ -280,52 +418,372 @@ def test_maintania_pipeline(payload: AnalyzeIssuePayload):
         top_k=10
     )
 
-    print(results)
-    # # ----------------------------
-    # # Phase 3 — Repo Cloner and Finding the Relevent Code Blocks
-    # # ----------------------------
-    engine = RepoIntelligenceEngine()
+    # ----------------------------
+    # Phase 3 — Retrieve Relevant Code From Vector DB
+    # ----------------------------
 
-    try:
-        engine.clone_repo(
-            owner=payload.owner,
-            repo=payload.repo,
-            installation_id=payload.installation_id
+    query = f"""
+    
+    Bug Report
+    Title:
+    {payload.issue_title}
+
+    Description:
+    {payload.issue_body}
+    
+    Find code responsible for this issue.
+    """
+
+    query_vector = embed([query])[0]
+
+    repo_full_name = f"{payload.owner}/{payload.repo}"
+
+    search_results = client.query_points(
+        collection_name="repo_code_embeddings",
+        query=query_vector,
+        limit=10,
+
+        query_filter=Filter(
+            must=[
+                FieldCondition(
+                    key="repo",
+                    match=MatchValue(value=repo_full_name)
+                )
+            ]
         )
+    )
 
-        success = engine.process_repository()
+    repo_context = []
 
-        if not success:
-            return {"error": "No valid source files found"}
+    for r in search_results.points:
 
-        query = f"{payload.issue_title}\n{payload.issue_body}"
+        repo_context.append({
+            "file": r.payload.get("file"),
+            "code": r.payload.get("code"),
+            "score": r.score
+        })
 
-        repo_context = engine.search(query, top_k=5)
+    # ----------------------------
+    # Phase 4 — Root Cause Analysis
+    # ----------------------------
 
-        file_tree = engine.file_tree
-        
-        
-        root_engine = RootCauseEngine()
-        
-        analysis = root_engine.analyze(
-            payload.issue_title,
-            payload.issue_body,
-            repo_context,
-            file_tree
-        )
+    root_engine = RootCauseEngine()
 
-    finally:
-        engine.cleanup()
-
+    analysis = root_engine.analyze(
+        payload.issue_title,
+        payload.issue_body,
+        repo_context,
+        None
+    )
 
     return {
+        "label":classification,
         "issue_number": payload.issue_number,
-        # 'labels': classification,
         "similar_fixes": results,
         "repo_context": repo_context,
-        "file_tree":file_tree,
-        'analysis': analysis
-
+        "analysis": analysis
     }
     
-    
+
+
+# -----------------------------
+# REQUEST SCHEMA
+# -----------------------------
+class SyncRepoPayload(BaseModel):
+    installation_id: int
+    owner: str
+    repo: str
+
+    # optional
+    branch: str | None = None
+    pr_number: int | None = None
+    base_branch: str | None = "main"
+
+
+# -----------------------------
+# HELPER: UPDATE EXISTING CLONE
+# -----------------------------
+def update_repo(repo_path, branch):
+    repo = Repo(repo_path)
+
+    repo.remotes.origin.fetch()
+
+    repo.git.checkout(branch)
+    repo.git.reset("--hard", f"origin/{branch}")
+
+
+# -----------------------------
+# HELPER: CHECKOUT PR
+# -----------------------------
+def checkout_pr(repo_path, pr_number):
+    repo = Repo(repo_path)
+
+    repo.remotes.origin.fetch(
+        f"pull/{pr_number}/head:pr_{pr_number}"
+    )
+
+    repo.git.checkout(f"pr_{pr_number}")
+
+
+# -----------------------------
+# MAIN API
+# -----------------------------
+@router.post("/sync-repo")
+def sync_repo(payload: SyncRepoPayload):
+
+    engine = RepoIntelligenceEngine()
+
+    # -----------------------------
+    # STEP 1: CLONE (if not exists)
+    # -----------------------------
+    branch = payload.branch
+
+    if not branch:
+        branch = "main"
+
+    branch = engine.clone_repo(
+        payload.owner,
+        payload.repo,
+        payload.installation_id,
+        payload.branch
+    )
+
+    # -----------------------------
+    # STEP 2: HANDLE PR vs PUSH
+    # -----------------------------
+    repo_path = engine.repo_root
+
+    if payload.pr_number:
+        print(f"Processing PR #{payload.pr_number}")
+
+        checkout_pr(repo_path, payload.pr_number)
+
+    else:
+        print(f"Processing branch: {branch}")
+
+        update_repo(repo_path, branch)
+
+    # -----------------------------
+    # STEP 3: INCREMENTAL INDEXING
+    # -----------------------------
+    indexer = IncrementalIndexer(engine)
+
+    result = indexer.run(
+        payload.owner,
+        payload.repo,
+        branch
+    )
+
+    # -----------------------------
+    # STEP 4: FULL INDEX (FIRST TIME)
+    # -----------------------------
+    if result == "FULL_REINDEX":
+
+        sync_start = time.time()
+        engine.upsert_repo_state(
+            payload.owner,
+            payload.repo,
+            branch,
+            {
+                "status": "indexing",
+                "last_update_type": "full",
+                "error": None
+            }
+        )
+
+        try:
+            stats, _ = engine.process_repository(
+                payload.owner,
+                payload.repo,
+                branch
+            )
+            repo_obj = Repo(engine.repo_root)
+            current_commit = repo_obj.head.commit.hexsha
+
+            update_type = "pr" if payload.pr_number else "full"
+            engine.upsert_repo_state(
+                payload.owner,
+                payload.repo,
+                branch,
+                {
+                    "last_commit": current_commit,
+                    "total_files": stats["total_files"],
+                    "total_chunks": stats["total_chunks"],
+                    "languages": stats["languages"],
+                    "last_indexed_at": engine._utc_now_iso(),
+                    "last_index_duration_sec": round(time.time() - sync_start, 2),
+                    "status": "ready",
+                    "last_update_type": update_type,
+                    "error": None
+                }
+            )
+        except Exception as e:
+            engine.upsert_repo_state(
+                payload.owner,
+                payload.repo,
+                branch,
+                {
+                    "status": "failed",
+                    "last_indexed_at": engine._utc_now_iso(),
+                    "last_index_duration_sec": round(time.time() - sync_start, 2),
+                    "last_update_type": "pr" if payload.pr_number else "full",
+                    "error": str(e)
+                }
+            )
+            raise
+
+    elif result in ("UPDATED", "NO_CHANGE") and payload.pr_number:
+        # mark update type for PR sync without recomputing full stats
+        state = engine.get_repo_state(payload.owner, payload.repo, branch) or {}
+        engine.upsert_repo_state(
+            payload.owner,
+            payload.repo,
+            branch,
+            {
+                "last_commit": state.get("last_commit"),
+                "last_indexed_at": engine._utc_now_iso(),
+                "last_update_type": "pr",
+                "status": "ready",
+                "error": None
+            }
+        )
+
+    # -----------------------------
+    # CLEANUP
+    # -----------------------------
+    engine.cleanup()
+
+    return {
+        "status": result,
+        "repo": f"{payload.owner}/{payload.repo}",
+        "branch": branch,
+        "pr": payload.pr_number
+    }
+
+
+class RepoStatsRequest(BaseModel):
+    owner: str = Field(..., description="GitHub owner (required)")
+    repo: Optional[str] = None
+    branch: Optional[str] = None
+    limit: int = Field(default=50, ge=1, le=500)
+    offset: int = Field(default=0, ge=0)
+
+@router.get("/repo-stats")
+def repo_stats(request: RepoStatsRequest):
+    engine = RepoIntelligenceEngine()
+    engine.create_state_collection()
+    owner = request.owner
+    repo = request.repo
+    branch = request.branch
+    limit = request.limit
+    offset = request.offset
+    # -----------------------------------
+    # VALIDATION
+    # -----------------------------------
+    if not owner:
+        raise HTTPException(
+            status_code=400,
+            detail="owner is required"
+        )
+
+    # -----------------------------------
+    # CASE 3: owner + repo + branch
+    # -----------------------------------
+    if owner and repo and branch:
+        record = engine.get_repo_state(owner, repo, branch)
+
+        if not record:
+            raise HTTPException(
+                status_code=404,
+                detail="Repository state not found"
+            )
+
+        return {
+            "count": 1,
+            "items": [record],
+            "pagination": {
+                "limit": limit,
+                "offset": offset,
+                "next_offset": None
+            },
+            "aggregation": {
+                "total_repos": 1,
+                "total_chunks": int(record.get("total_chunks") or 0)
+            }
+        }
+
+    # -----------------------------------
+    # FETCH ALL (will filter below)
+    # -----------------------------------
+    records = []
+    next_offset = None
+    cursor = None
+
+    while True:
+        points, cursor = engine.qdrant.scroll(
+            collection_name=engine.state_collection,
+            limit=200,
+            offset=cursor,
+            with_payload=True,
+            with_vectors=False
+        )
+
+        if not points:
+            break
+
+        for p in points:
+            payload = p.payload or {}
+
+            repo_name = payload.get("repo")  # format: owner/repo
+
+            if not repo_name:
+                continue
+
+            try:
+                payload_owner, payload_repo = repo_name.split("/")
+            except ValueError:
+                continue
+
+            # -----------------------------------
+            # CASE 1: owner only
+            # -----------------------------------
+            if owner and not repo:
+                if payload_owner != owner:
+                    continue
+
+            # -----------------------------------
+            # CASE 2: owner + repo
+            # -----------------------------------
+            elif owner and repo and not branch:
+                if payload_owner != owner or payload_repo != repo:
+                    continue
+
+            records.append(payload)
+
+        if cursor is None:
+            break
+
+    # -----------------------------------
+    # PAGINATION + AGGREGATION
+    # -----------------------------------
+    total_repos = len(records)
+    total_chunks = sum(int(item.get("total_chunks") or 0) for item in records)
+
+    page_items = records[offset:offset + limit]
+
+    if offset + limit < total_repos:
+        next_offset = offset + limit
+
+    return {
+        "count": len(page_items),
+        "items": page_items,
+        "pagination": {
+            "limit": limit,
+            "offset": offset,
+            "next_offset": next_offset
+        },
+        "aggregation": {
+            "total_repos": total_repos,
+            "total_chunks": total_chunks
+        }
+    }

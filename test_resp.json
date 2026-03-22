@@ -1,0 +1,105 @@
+{
+    "label": {
+        "type": "bug",
+        "area": [
+            "database",
+            "backend"
+        ],
+        "priority": "high",
+        "confidence": 0.9,
+        "reasoning": "The issue describes a failure in the expected behavior where an SMS is sent but the corresponding data is not stored, indicating a bug in the backend processing or database interaction.",
+        "github_labels": [
+            "backend",
+            "priority:high",
+            "database",
+            "bug"
+        ]
+    },
+    "issue_number": 12419,
+    "similar_fixes": {
+        "issue_number": 12419,
+        "llm_keywords": [
+            "auto sms",
+            "payment sms",
+            "sms not storing",
+            "app entry",
+            "functionality not working"
+        ],
+        "token_count_keywords": 88,
+        "token_count_rank": 0,
+        "duplicates": [
+            {
+                "number": 4,
+                "title": "Auto sms functionality is not working",
+                "body": "when i made the payment i am getting the sms but the entry is not getting store in the app",
+                "html_url": "https://github.com/Nimeshchandegra/BudgetApp/issues/4",
+                "created_at": "2026-03-17T17:29:37Z",
+                "score": 1.0,
+                "semantic": 1.0,
+                "lexical": 1.0
+            }
+        ],
+        "similar_fixes": []
+    },
+    "repo_context": [
+        {
+            "file": "app\\src\\main\\java\\com\\example\\budgetapp\\SmsReceiver.kt",
+            "code": "override fun onReceive(context: Context, intent: Intent) {\n        if (intent.action == Telephony.Sms.Intents.SMS_RECEIVED_ACTION) {\n            val messages = Telephony.Sms.Intents.getMessagesFromIntent(intent)\n            val db = AppDatabase.getDatabase(context)\n            val transactionDao = db.transactionDao()\n            val accountDao = db.accountDao()\n            val categoryDao = db.categoryDao()\n\n            CoroutineScope(Dispatchers.IO).launch {\n                val accounts = accountDao.getAllAccountsOnce()\n                val categories = categoryDao.getAllCategoriesOnce()\n\n                for (message in messages) {\n                    val body = message.messageBody\n                    val date = message.timestampMillis\n                    val address = message.originatingAddress\n\n                    SmsParser.parse(body, date, address, accounts, categories)?.let { tx ->\n                        try {\n                            // Use reconciliation method to allow re-importing if previously deleted\n                            transactionDao.insertTransactionWithReconciliation(tx)\n                            Log.d(TAG, \"Successfully ingested real-time SMS transaction: ${tx.externalId}\")\n                        } catch (e: Exception) {\n                            Log.e(TAG, \"Failed to insert SMS transaction. Possible duplicate: ${tx.externalId}\", e)\n                        }\n                    }\n                }\n            }\n        }\n    }",
+            "score": 0.71302974
+        },
+        {
+            "file": "app\\src\\main\\java\\com\\example\\budgetapp\\SmsBackfillWorker.kt",
+            "code": "selection.append(\" AND ${Telephony.Sms.BODY} LIKE ?\")\n            selectionArgs.add(\"%$keyword%\")\n        }\n\n        val cursor = try {\n            applicationContext.contentResolver.query(\n                Telephony.Sms.CONTENT_URI,\n                arrayOf(Telephony.Sms.BODY, Telephony.Sms.DATE, Telephony.Sms.ADDRESS),\n                selection.toString(),\n                selectionArgs.toTypedArray(),\n                \"${Telephony.Sms.DATE} ASC\"\n            )\n        } catch (e: Exception) {\n            Log.e(\"SmsBackfill\", \"Query failed\", e)\n            null\n        }\n\n        val transactionsToInsert = mutableListOf<Transaction>()\n        val importLogs = mutableListOf<String>()\n        var processedSmsCount = 0\n        var foundTransactionsCount = 0\n        val totalSms = cursor?.count ?: 0\n\n        cursor?.use {\n            val bodyIndex = it.getColumnIndex(Telephony.Sms.BODY)\n            val dateIndex = it.getColumnIndex(Telephony.Sms.DATE)\n            val addressIndex = it.getColumnIndex(Telephony.Sms.ADDRESS)\n\n            while (it.moveToNext()) {\n                val body = it.getString(bodyIndex)\n                val date = it.getLong(dateIndex)\n                val address = it.getString(addressIndex)\n\n                SmsParser.parse(body, date, address, accounts, categories, forcedAccountId)?.let { tx ->\n                    transactionsToInsert.add(tx)\n                    val logEntry = \"${tx.category}: ₹${AmountFormatter.format(tx.amount)} (${SimpleDateFormat(\"dd MMM\", Locale.getDefault()).format(Date(tx.date))})\"\n                    importLogs.add(logEntry)\n                    foundTransactionsCount++\n                }",
+            "score": 0.69862986
+        },
+        {
+            "file": "app\\src\\main\\java\\com\\example\\budgetapp\\ui\\components\\SmsBackfillComponents.kt",
+            "code": "@Composable\nfun SmsBackfillDialog(accountDao: AccountDao, onDismiss: () -> Unit) {\n    val context = LocalContext.current\n    var startDate by remember { mutableStateOf(getFinancialYearStart()) }\n    var bankSenderId by remember { mutableStateOf(\"\") }\n    var searchKeyword by remember { mutableStateOf(\"\") }\n    \n    val accounts by accountDao.getAllAccounts().collectAsState(initial = emptyList())\n    var selectedAccount by remember { mutableStateOf<Account?>(null) }\n    var accountDropdownExpanded by remember { mutableStateOf(false) }\n    \n    var isRunning by remember { mutableStateOf(false) }\n    var progress by remember { mutableStateOf(0) }\n    var importedCount by remember { mutableStateOf(0) }\n    var currentLogs by remember { mutableStateOf<List<String>>(emptyList()) }\n    var resultData by remember { mutableStateOf<Data?>(null) }\n\n    val workManager = WorkManager.getInstance(context)\n    val workId = remember { UUID.randomUUID() }\n\n    val workInfo by workManager.getWorkInfoByIdFlow(workId).collectAsState(initial = null)\n\n    LaunchedEffect(workInfo) {\n        workInfo?.let {\n            when (it.state) {\n                WorkInfo.State.RUNNING -> {\n                    isRunning = true\n                    progress = it.progress.getInt(\"progress\", 0)\n                    importedCount = it.progress.getInt(\"count\", 0)\n                    val logs = it.progress.getStringArray(\"logs\")\n                    if (logs != null) {\n                        currentLogs = logs.toList()\n                    }\n                }\n                WorkInfo.State.SUCCEEDED -> {\n                    isRunning = false\n                    progress = 100\n                    resultData = it.outputData\n                    val finalLogs = it.outputData.getStringArray(\"final_logs\")\n                    if (finalLogs != null) {",
+            "score": 0.6984142
+        },
+        {
+            "file": "app\\src\\main\\java\\com\\example\\budgetapp\\SmsBackfillWorker.kt",
+            "code": "override suspend fun doWork(): Result {\n        val startDate = inputData.getLong(\"start_date\", getFinancialYearStart())\n        val senderId = inputData.getString(\"sender_id\")\n        val keyword = inputData.getString(\"keyword\")\n        val forcedAccountId = inputData.getInt(\"forced_account_id\", -1).let { if (it == -1) null else it }\n        \n        Log.d(\"SmsBackfill\", \"Starting backfill. Date: ${Date(startDate)}, Sender: $senderId, Keyword: $keyword, ForcedAccount: $forcedAccountId\")\n        \n        val db = AppDatabase.getDatabase(applicationContext)\n        val transactionDao = db.transactionDao()\n        val accountDao = db.accountDao()\n        val categoryDao = db.categoryDao()\n\n        val accounts = accountDao.getAllAccountsOnce()\n        val categories = categoryDao.getAllCategoriesOnce()\n        \n        if (accounts.isEmpty()) {\n            Log.e(\"SmsBackfill\", \"No accounts found. Cannot proceed.\")\n            return Result.failure()\n        }\n\n        val selection = StringBuilder(\"${Telephony.Sms.DATE} >= ?\")\n        val selectionArgs = mutableListOf(startDate.toString())\n\n        if (!senderId.isNullOrBlank()) {\n            selection.append(\" AND ${Telephony.Sms.ADDRESS} LIKE ?\")\n            selectionArgs.add(\"%$senderId%\")\n        }\n\n        if (!keyword.isNullOrBlank()) {\n            selection.append(\" AND ${Telephony.Sms.BODY} LIKE ?\")\n            selectionArgs.add(\"%$keyword%\")\n        }\n\n        val cursor = try {\n            applicationContext.contentResolver.query(\n                Telephony.Sms.CONTENT_URI,\n                arrayOf(Telephony.Sms.BODY, Telephony.Sms.DATE, Telephony.Sms.ADDRESS),\n                selection.toString(),\n                selectionArgs.toTypedArray(),",
+            "score": 0.6829935
+        },
+        {
+            "file": "app\\src\\main\\java\\com\\example\\budgetapp\\ui\\screens\\MoreOptionsScreen.kt",
+            "code": "onSubScreenSelect(SubScreen.Delete) \n            }\n\n            MoreOptionItem(\n                title = \"Import SMS History\", \n                icon = Icons.Default.History, \n                color = MaterialTheme.colorScheme.primary\n            ) { \n                showBackfillDialog = true \n            }\n            \n            Spacer(modifier = Modifier.height(32.dp))\n        }\n    }\n\n    if (showBackfillDialog) {\n        SmsBackfillDialog(accountDao = accountDao, onDismiss = { showBackfillDialog = false })\n    }\n}",
+            "score": 0.6755878
+        },
+        {
+            "file": "app\\src\\main\\AndroidManifest.xml",
+            "code": "<?xml version=\"1.0\" encoding=\"utf-8\"?>\n<manifest xmlns:android=\"http://schemas.android.com/apk/res/android\"\n    xmlns:tools=\"http://schemas.android.com/tools\">\n\n    <uses-permission android:name=\"android.permission.RECEIVE_SMS\" />\n    <uses-permission android:name=\"android.permission.READ_SMS\" />\n\n    <application\n        android:allowBackup=\"true\"\n        android:dataExtractionRules=\"@xml/data_extraction_rules\"\n        android:fullBackupContent=\"@xml/backup_rules\"\n        android:icon=\"@mipmap/ic_launcher\"\n        android:label=\"@string/app_name\"\n        android:roundIcon=\"@mipmap/ic_launcher_round\"\n        android:supportsRtl=\"true\"\n        android:theme=\"@style/Theme.BudgetApp\">\n        \n        <receiver\n            android:name=\".SmsReceiver\"\n            android:exported=\"true\"\n            android:permission=\"android.permission.BROADCAST_SMS\">\n            <intent-filter>\n                <action android:name=\"android.provider.Telephony.SMS_RECEIVED\" />\n            </intent-filter>\n        </receiver>\n\n        <activity\n            android:name=\".MainActivity\"\n            android:exported=\"true\"\n            android:label=\"@string/app_name\"\n            android:theme=\"@style/Theme.BudgetApp\">\n            <intent-filter>\n                <action android:name=\"android.intent.action.MAIN\" />\n\n                <category android:name=\"android.intent.category.LAUNCHER\" />\n            </intent-filter>\n        </activity>\n    </application>\n\n</manifest>",
+            "score": 0.67446476
+        },
+        {
+            "file": "app\\src\\main\\java\\com\\example\\budgetapp\\SmsBackfillWorker.kt",
+            "code": "val date = it.getLong(dateIndex)\n                val address = it.getString(addressIndex)\n\n                SmsParser.parse(body, date, address, accounts, categories, forcedAccountId)?.let { tx ->\n                    transactionsToInsert.add(tx)\n                    val logEntry = \"${tx.category}: ₹${AmountFormatter.format(tx.amount)} (${SimpleDateFormat(\"dd MMM\", Locale.getDefault()).format(Date(tx.date))})\"\n                    importLogs.add(logEntry)\n                    foundTransactionsCount++\n                }\n\n                processedSmsCount++\n                if (processedSmsCount % 20 == 0 || processedSmsCount == totalSms) {\n                    setProgress(Data.Builder()\n                        .putInt(\"progress\", (processedSmsCount * 100 / (if (totalSms > 0) totalSms else 1)))\n                        .putInt(\"count\", foundTransactionsCount)\n                        .putStringArray(\"logs\", importLogs.takeLast(20).toTypedArray()) \n                        .build())\n                }\n                \n                if (transactionsToInsert.size >= 50) {\n                    transactionDao.insertTransactionsWithReconciliation(transactionsToInsert)\n                    transactionsToInsert.clear()\n                }\n            }\n        }\n\n        if (transactionsToInsert.isNotEmpty()) {\n            transactionDao.insertTransactionsWithReconciliation(transactionsToInsert)\n        }\n\n        return Result.success(Data.Builder()\n            .putInt(\"total_imported\", foundTransactionsCount)\n            .putStringArray(\"final_logs\", importLogs.toTypedArray())\n            .build())\n    }",
+            "score": 0.6739676
+        },
+        {
+            "file": "app\\src\\main\\java\\com\\example\\budgetapp\\ui\\components\\SmsBackfillComponents.kt",
+            "code": "if (logs != null) {\n                        currentLogs = logs.toList()\n                    }\n                }\n                WorkInfo.State.SUCCEEDED -> {\n                    isRunning = false\n                    progress = 100\n                    resultData = it.outputData\n                    val finalLogs = it.outputData.getStringArray(\"final_logs\")\n                    if (finalLogs != null) {\n                        currentLogs = finalLogs.toList()\n                    }\n                }\n                WorkInfo.State.FAILED -> {\n                    isRunning = false\n                }\n                else -> {}\n            }\n        }\n    }\n\n    AlertDialog(\n        onDismissRequest = { if (!isRunning) onDismiss() },\n        title = { Text(\"Import SMS History\") },\n        text = {\n            Column(\n                verticalArrangement = Arrangement.spacedBy(16.dp),\n                modifier = if (!isRunning && resultData == null) Modifier.verticalScroll(rememberScrollState()) else Modifier.heightIn(max = 400.dp)\n            ) {\n                if (!isRunning && resultData == null) {\n                    Text(\"Provide targeted filters to fetch historical transactions from specific banks.\")\n                    \n                    Box {\n                        OutlinedTextField(\n                            value = selectedAccount?.name ?: \"Select Target Account (Required)\",\n                            onValueChange = {},\n                            readOnly = true,\n                            label = { Text(\"Target Account\") },\n                            modifier = Modifier.fillMaxWidth(),\n                            trailingIcon = {",
+            "score": 0.6713485
+        },
+        {
+            "file": "app\\src\\main\\java\\com\\example\\budgetapp\\ui\\screens\\DataManagementScreen.kt",
+            "code": "TextButton(\n                            onClick = { templateLauncher.launch(\"budget_import_template.xlsx\") },\n                            modifier = Modifier.fillMaxWidth()\n                        ) {\n                            Icon(Icons.Default.Description, null)\n                            Spacer(Modifier.width(8.dp))\n                            Text(\"Download Import Template\")\n                        }\n                    }\n                }\n            }\n\n            // 2. Danger Zone\n            Column(verticalArrangement = Arrangement.spacedBy(12.dp)) {\n                Text(\"Danger Zone\", style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.Bold, color = Color(0xFFC62828))\n                AlertCard(\"Destructive Operations\", \"These actions are permanent and will affect your account balances.\")\n\n                DeleteSection(\n                    title = \"Transactions\",\n                    actions = listOf(\n                        DataControlAction(\"Delete All Transactions\", \"ALL\", Color(0xFFC62828)),\n                        DataControlAction(\"Delete Auto-Added (SMS)\", \"AUTO\", Color(0xFFE65100)),\n                        DataControlAction(\"Delete Manual Entry\", \"MANUAL\", Color(0xFFE65100))\n                    ),\n                    onAction = { showConfirmDialog = it }\n                )\n            }\n        }\n\n        // Import Preview Dialog\n        if (showImportSummary != null) {\n            AlertDialog(\n                onDismissRequest = { showImportSummary = null },\n                title = { Text(\"Import Preview\") },\n                text = {\n                    Column {\n                        Text(\"Found ${showImportSummary?.size} records in the file.\")\n                        Text(\"Existing accounts and categories will be mapped automatically. Missing ones will be created.\")\n                    }\n                },",
+            "score": 0.66940844
+        },
+        {
+            "file": "app\\src\\main\\java\\com\\example\\budgetapp\\ui\\components\\TransactionComponents.kt",
+            "code": "TransactionNoteModal(\n    transaction: Transaction,\n    onNoteSave: (String) -> Unit,\n    onDismiss: () -> Unit\n) {\n    var noteText by remember { mutableStateOf(transaction.note) }\n    \n    AlertDialog(\n        onDismissRequest = onDismiss,\n        title = { Text(\"Edit Note\") },\n        text = {\n            OutlinedTextField(\n                value = noteText,\n                onValueChange = { noteText = it },\n                modifier = Modifier.fillMaxWidth().height(150.dp),\n                placeholder = { Text(\"Add details about this transaction...\") }\n            )\n        },\n        confirmButton = {\n            Button(onClick = { onNoteSave(noteText); onDismiss() }) {\n                Text(\"Save\")\n            }\n        },\n        dismissButton = {\n            TextButton(onClick = onDismiss) { Text(\"Cancel\") }\n        }\n    )\n}\n\n@OptIn(Experim",
+            "score": 0.66791344
+        }
+    ],
+    "analysis": {
+        "root_cause_summary": "The most likely root cause is that the `SmsParser.parse()` method (not provided in the context) is failing to extract transaction details from the received SMS body, causing it to return `null`. When `SmsParser.parse()` returns `null`, the `transactionDao.insertTransactionWithReconciliation(tx)` block is never executed, and no transaction is logged or stored.",
+        "likely_files": [
+            "app\\src\\main\\java\\com\\example\\budgetapp\\SmsReceiver.kt"
+        ],
+        "reasoning": "The issue states that SMS messages are received, but entries are not stored. `SmsReceiver.kt` is the component responsible for real-time SMS processing and storage. Inside `SmsReceiver.kt`, SMS messages are parsed by `SmsParser.parse()`. If this method returns `null`, the subsequent `.let { tx -> ... }` block, which contains the database insertion logic, will not execute. The existing logging only covers successful insertions or exceptions during the database operation itself, not when parsing fails to yield a transaction object. Adding a log for null parsing results will confirm this theory.",
+        "fix_strategy": "Add a log statement in `SmsReceiver.kt` to explicitly record when `SmsParser.parse()` returns `null`. This will help diagnose whether the SMS parsing logic is the point of failure.",
+        "confidence": 0.9
+    }
+}
