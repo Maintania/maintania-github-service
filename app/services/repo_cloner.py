@@ -23,12 +23,17 @@ from qdrant_client.models import (
 )
 
 from app.services.github_client import get_installation_token
+import torch
+from google import genai
+
 # ===============================
 # GPU TOGGLE
 # ===============================
 USE_GPU = True  # set False to force CPU
+GEMINI_API_KEY = os.getenv("GEMINI_API_KEY")
+GEMINI_URL = "https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash-lite:generateContent"
+client = genai.Client(api_key=GEMINI_API_KEY)
 
-import torch
 
 if USE_GPU and torch.cuda.is_available():
     DEVICE = "cuda"
@@ -43,12 +48,13 @@ MODEL_NAME = "BAAI/bge-small-en-v1.5"
 CHUNK_SIZE = 1500
 CHUNK_OVERLAP = 200
 
+MAX_WORKERS = 4
 # CHANGED PARAMETERS
-EMBED_BATCH_SIZE = 1024
+EMBED_BATCH_SIZE = 512
 MODEL_BATCH_SIZE = 256
 
 MODEL_BATCH_SIZE_CPU = 64
-MODEL_BATCH_SIZE_GPU = 512
+MODEL_BATCH_SIZE_GPU = 128
 
 MAX_FILE_SIZE = 200_000
 
@@ -73,7 +79,17 @@ def embed(texts):
         batch_size=batch_size
     )
 
+def clean_llm_json(text: str):
 
+    text = text.strip()
+
+    # remove markdown code blocks
+    text = text.replace("```json", "")
+    text = text.replace("```", "")
+
+    text = text.strip()
+
+    return json.loads(text)
 def load_extension_map():
 
     if os.path.exists(LINGUIST_CACHE):
@@ -98,6 +114,21 @@ def load_extension_map():
 
 
 extension_map = load_extension_map()
+
+
+HIGH_VALUE_EXTENSIONS = {
+    ".py", ".js", ".ts", ".jsx", ".tsx",
+    ".java", ".go", ".cpp", ".c", ".h",
+    ".cs", ".rs", ".php", ".rb", ".kt"
+}
+
+LOW_VALUE_EXTENSIONS = {
+    ".po", ".csv", ".log", ".txt", ".lock", ".map"
+}
+
+CONDITIONAL_EXTENSIONS = {
+    ".json", ".yaml", ".yml", ".toml", ".md"
+}
 
 
 class RepoIntelligenceEngine:
@@ -140,7 +171,8 @@ class RepoIntelligenceEngine:
             "composer.lock",
             "Cargo.lock",
             ".DS_Store",
-            "Thumbs.db"
+            "Thumbs.db",
+            "__init__.py"
         }
 
         self.ignore_extensions = {
@@ -160,7 +192,123 @@ class RepoIntelligenceEngine:
         self.state_collection = "repo_index_state"
 
         self.embed_batch_size = EMBED_BATCH_SIZE
+        
+    def get_uncertain_extensions(self, repo_map):
+        exts = set()
 
+        for f in repo_map["files"]:
+            _, ext = os.path.splitext(f["path"])
+            ext = ext.lower()
+
+            if (
+                ext
+                and ext not in HIGH_VALUE_EXTENSIONS
+                and ext not in LOW_VALUE_EXTENSIONS
+            ):
+                exts.add(ext)
+
+        return list(exts)
+    
+    def llm_filter_extensions(self,extensions: list[str]):
+
+        if not GEMINI_API_KEY:
+            return []
+        print(f'Extension filtering with {len(extensions)} extensions: {", ".join(extensions)}')
+        prompt = f"""
+        Given these file extensions from a GitHub repository:
+
+        {extensions}
+
+        Select ONLY the extensions useful for:
+        - understanding code logic
+        - debugging
+        - fixing issues
+
+        Ignore:
+        - translations (.po)
+        - logs
+        - datasets
+        - generated files
+
+        Only necessary extensions should be selected.
+
+        Strictly return JSON list:
+        [".ext1", ".ext2"]
+        """
+
+        token_count = 0
+
+        try:
+            token_info = client.models.count_tokens(
+                model=MODEL_NAME,
+                contents=prompt
+            )
+            print("Gemini extension filter tokens:", token_info.total_tokens)
+            token_count = token_info.total_tokens
+        except Exception as e:
+            print("Token count failed:", e)
+
+        payload = {
+            "contents": [{"parts": [{"text": prompt}]}],
+            "generationConfig": {
+                "temperature": 0,
+                "maxOutputTokens": 100
+            }
+        }
+
+        try:
+            r = requests.post(
+                GEMINI_URL,
+                params={"key": GEMINI_API_KEY},
+                json=payload,
+                timeout=20
+            )
+
+            text = r.json()["candidates"][0]["content"]["parts"][0]["text"]
+
+            print("Raw Gemini response:", text)
+
+            llm_output = clean_llm_json(text)
+            
+            valid_input = set(extensions)  # original input list
+
+            filtered = [
+                e.lower()
+                for e in llm_output
+                if isinstance(e, str) and e.lower() in valid_input
+            ]
+
+            return filtered, token_count
+            # normalize
+
+        except Exception as e:
+            print("LLM extension filter failed:", e)
+            return [], token_count
+        
+    
+    def ask_llm_for_extensions(self, extensions):
+        if not extensions:
+            return set()
+
+        extensions = extensions[:50]
+
+        try:
+            llm_selected, _ = self.llm_filter_extensions(extensions)
+            return set(llm_selected)
+        except Exception as e:
+            print("LLM failed:", e)
+            return set()
+
+
+    def build_extension_filter(self, repo_map):
+        uncertain = self.get_uncertain_extensions(repo_map)
+
+        llm_selected = self.ask_llm_for_extensions(uncertain)
+
+        final_exts = set(HIGH_VALUE_EXTENSIONS)
+        final_exts.update(llm_selected)
+
+        return final_exts
 
     def _utc_now_iso(self):
         return datetime.now(timezone.utc).isoformat()
@@ -223,6 +371,8 @@ class RepoIntelligenceEngine:
                 })
 
         return buffer_chunks, buffer_meta
+    
+    
     def get_parser_for_language(self, language):
 
         if language in self.parser_cache:
@@ -385,7 +535,6 @@ class RepoIntelligenceEngine:
         return chunks
 
     def build_repo_structure_map(self, owner, repo, branch):
-
         repo_map = {
             "repo": f"{owner}/{repo}",
             "branch": branch,
@@ -393,8 +542,12 @@ class RepoIntelligenceEngine:
             "files": []
         }
 
+        # -----------------------------
+        # STEP 1: COLLECT FILES
+        # -----------------------------
         for root, dirs, files in os.walk(self.repo_root):
 
+            # remove ignored directories
             dirs[:] = [d for d in dirs if d not in self.ignore_dirs]
 
             for file in files:
@@ -413,7 +566,6 @@ class RepoIntelligenceEngine:
                     continue
 
                 relative_path = os.path.relpath(full_path, self.repo_root)
-
                 language = self.detect_language(file)
 
                 repo_map["files"].append({
@@ -422,7 +574,41 @@ class RepoIntelligenceEngine:
                     "size": size
                 })
 
-        print("FILES DISCOVERED:", len(repo_map["files"]))
+        print("FILES BEFORE FILTER:", len(repo_map["files"]))
+
+        # -----------------------------
+        # STEP 2: EXTENSION FILTER
+        # -----------------------------
+        allowed_extensions = self.build_extension_filter(repo_map)
+
+        filtered_files = []
+
+        for f in repo_map["files"]:
+            _, ext = os.path.splitext(f["path"])
+            ext = ext.lower()
+
+            # ❌ skip low-value
+            if ext in LOW_VALUE_EXTENSIONS:
+                continue
+
+            # ✅ always include high-value
+            if ext in HIGH_VALUE_EXTENSIONS:
+                filtered_files.append(f)
+                continue
+
+            # ⚖️ conditional include
+            if ext in CONDITIONAL_EXTENSIONS:
+                if f["size"] < MAX_FILE_SIZE:
+                    filtered_files.append(f)
+                continue
+
+            # 🤖 LLM-selected extensions
+            if ext in allowed_extensions:
+                filtered_files.append(f)
+
+        repo_map["files"] = filtered_files
+
+        print("FILES AFTER FILTER:", len(repo_map["files"]))
 
         return repo_map
  
@@ -554,7 +740,28 @@ class RepoIntelligenceEngine:
             collection_name=self.collection_name,
             points_selector=Filter(must=conditions)
         )
-    
+    def create_payload_indexes(self):
+        print("[Qdrant] Creating payload indexes...")
+
+        self.qdrant.create_payload_index(
+            collection_name=self.collection_name,
+            field_name="repo",
+            field_schema="keyword"
+        )
+
+        self.qdrant.create_payload_index(
+            collection_name=self.collection_name,
+            field_name="branch",
+            field_schema="keyword"
+        )
+
+        self.qdrant.create_payload_index(
+            collection_name=self.collection_name,
+            field_name="file",
+            field_schema="keyword"
+        )
+
+        print("[Qdrant] Payload indexes created")
     def create_collection(self, vector_size):
 
         collections = self.qdrant.get_collections().collections
@@ -568,6 +775,7 @@ class RepoIntelligenceEngine:
                     distance=Distance.COSINE
                 )
             )
+            self.create_payload_indexes()
 
     def process_repository(self, owner, repo, branch):
 
@@ -588,90 +796,47 @@ class RepoIntelligenceEngine:
         counter = 0
         last_report_time = start_time
 
-        for file_info in repo_map["files"]:
+        with ThreadPoolExecutor(max_workers=MAX_WORKERS) as executor:
 
-            relative_path = file_info["path"]
-            language = file_info["language"]
-
-            full_path = os.path.join(self.repo_root, relative_path)
-
-            if not os.path.exists(full_path):
-                continue
-
-            symbols = self.extract_symbols(full_path, language)
-
-            file_chunks = []
-
-            if symbols:
-
-                for symbol in symbols:
-
-                    chunks = self.chunk_symbol(
-                        symbol["code"],
-                        symbol["start_line"]
-                    )
-
-                    for c in chunks:
-
-                        buffer_chunks.append(c["text"])
-
-                        buffer_meta.append({
-                            "repo": f"{owner}/{repo}",
-                            "branch": branch,
-                            "file": relative_path,
-                            "language": language,
-                            "symbol_type": symbol["type"],
-                            "symbol_name": symbol["name"],
-                            "start_line": c["line"]
-                        })
-
-                        total_chunks += 1
-
-            else:
-
-                file_chunks = self.chunk_file(full_path)
-
-                for chunk in file_chunks:
-
-                    buffer_chunks.append(chunk)
-
-                    buffer_meta.append({
-                        "repo": f"{owner}/{repo}",
-                        "branch": branch,
-                        "file": relative_path,
-                        "language": language,
-                        "symbol_type": "file_chunk",
-                        "symbol_name": None,
-                        "start_line": 0
-                    })
-
-                    total_chunks += 1
-
-            counter += 1
-            total_files += 1
-            language_counts[language] = language_counts.get(language, 0) + 1
-
-            if len(buffer_chunks) >= EMBED_BATCH_SIZE:
-
-                self._process_batch(buffer_chunks, buffer_meta)
-
-                buffer_chunks = []
-                buffer_meta = []
-
-            if counter % 100 == 0:
-
-                now = time.time()
-
-                print(
-                    f"[{time.strftime('%H:%M:%S')}] "
-                    f"files={counter} chunks={total_chunks} "
-                    f"time={(now-last_report_time):.2f}s"
+            futures = [
+                executor.submit(
+                    self._process_single_file,
+                    file_info,
+                    owner,
+                    repo,
+                    branch
                 )
+                for file_info in repo_map["files"]
+            ]
 
-                last_report_time = now
+            for i, future in enumerate(as_completed(futures), 1):
+
+                chunks, metas = future.result()
+
+                buffer_chunks.extend(chunks)
+                buffer_meta.extend(metas)
+
+                total_chunks += len(chunks)
+                total_files += 1
+
+                # batching stays SAME
+                if len(buffer_chunks) >= EMBED_BATCH_SIZE:
+                    self.safe_process_batch(buffer_chunks, buffer_meta)
+                    buffer_chunks = []
+                    buffer_meta = []
+
+                # logging stays similar
+                if i % 100 == 0:
+                    now = time.time()
+                    print(
+                        f"[{time.strftime('%H:%M:%S')}] "
+                        f"files={i} chunks={total_chunks} "
+                        f"time={(now-last_report_time):.2f}s"
+                    )
+                    last_report_time = now
 
         if buffer_chunks:
-            self._process_batch(buffer_chunks, buffer_meta)
+            self.safe_process_batch(buffer_chunks, buffer_meta)
 
         print("FILES INDEXED:", total_files)
         print("CHUNKS INDEXED:", total_chunks)
@@ -717,6 +882,22 @@ class RepoIntelligenceEngine:
             points=points,
             wait=False   # ASYNC WRITE
         )
+        
+    def safe_process_batch(self, chunks, meta):
+        try:
+            self._process_batch(chunks, meta)
+
+        except Exception as e:
+            print(f"[Batch Failed] size={len(chunks)} error={e}")
+
+            if len(chunks) <= 32:
+                print("[Batch Failed] Skipping small batch")
+                return
+
+            mid = len(chunks) // 2
+
+            self.safe_process_batch(chunks[:mid], meta[:mid])
+            self.safe_process_batch(chunks[mid:], meta[mid:])
         
     def resolve_branch(self, owner, repo, installation_id, branch=None):
 
@@ -829,6 +1010,18 @@ class RepoIntelligenceEngine:
             raise Exception(
                 f"Clone failed after retries + fallback:\nAuth error: {last_error}\nPublic error: {e}"
             )
+    
+    from concurrent.futures import ThreadPoolExecutor
+
+    def delete_files_parallel(self, owner, repo, branch, file_paths):
+        def delete_one(path):
+            try:
+                self.delete_file_vectors(owner, repo, branch, path)
+            except Exception as e:
+                print(f"[Delete Error] {path}: {e}")
+
+        with ThreadPoolExecutor(max_workers=10) as executor:
+            executor.map(delete_one, file_paths)
     
     def delete_file_vectors(self, owner, repo, branch, file_path):
         self.qdrant.delete(

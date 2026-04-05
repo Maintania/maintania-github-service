@@ -668,6 +668,7 @@ class RepoStatsRequest(BaseModel):
     limit: int = Field(default=50, ge=1, le=500)
     offset: int = Field(default=0, ge=0)
 
+
 @router.get("/repo-stats")
 def repo_stats(request: RepoStatsRequest):
     engine = RepoIntelligenceEngine()
