@@ -185,7 +185,8 @@ class RepoIntelligenceEngine:
         }
 
         self.qdrant = QdrantClient(
-            url="http://localhost:6333"
+            url=os.getenv("Qdrant_URL"), 
+            api_key=os.getenv("Qdrant_Api_Key"),
         )
 
         self.collection_name = "repo_code_embeddings"

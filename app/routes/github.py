@@ -21,9 +21,14 @@ from qdrant_client import QdrantClient
 from sentence_transformers import SentenceTransformer
 from qdrant_client.models import Filter, FieldCondition, MatchValue
 from app.services.incremental_indexer import *
+import os
 
 
-client = QdrantClient("localhost", port=6333)
+
+client = QdrantClient(
+    url=os.getenv("Qdrant_URL"), 
+    api_key=os.getenv("Qdrant_Api_Key"),
+)
 
 router = APIRouter()
 
