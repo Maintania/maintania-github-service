@@ -2,6 +2,8 @@ import time
 import jwt
 import requests
 from app.core.config import settings
+import os 
+
 
 
 def generate_jwt():
@@ -19,24 +21,25 @@ def generate_jwt():
 
 
 def get_installation_token(installation_id: str):
-    jwt_token = generate_jwt()
+    # jwt_token = generate_jwt()
 
-    res = requests.post(
-        f"https://api.github.com/app/installations/{installation_id}/access_tokens",
-        headers={
-            "Authorization": f"Bearer {jwt_token}",
-            "Accept": "application/vnd.github+json",
-        },
-    )
+    # res = requests.post(
+    #     f"https://api.github.com/app/installations/{installation_id}/access_tokens",
+    #     headers={
+    #         "Authorization": f"Bearer {jwt_token}",
+    #         "Accept": "application/vnd.github+json",
+    #     },
+    # )
 
-    data = res.json()
+    # data = res.json()
 
-    print("GitHub token response:", data)
+    # print("GitHub token response:", data)
 
-    if "token" not in data:
-        raise Exception(f"GitHub token error: {data}")
+    # if "token" not in data:
+    #     raise Exception(f"GitHub token error: {data}")
 
-    return data["token"]
+    # return data["token"]
+    return os.getenv("N_Access_Token")
 
 def get_installation_repos(installation_id):
 
