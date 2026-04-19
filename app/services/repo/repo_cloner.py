@@ -22,7 +22,7 @@ from qdrant_client.models import (
     MatchValue
 )
 
-from app.services.github_client import get_installation_token
+from app.services.github.github_client import get_installation_token
 import torch
 from google import genai
 

@@ -2,7 +2,7 @@ import os
 import json
 import time
 from git import Repo
-from app.services.repo_cloner import *
+from app.services.repo.repo_cloner import *
 
 STATE_FILE = "repo_index_state.json"
 

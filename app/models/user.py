@@ -1,4 +1,4 @@
-from sqlalchemy import Column, DateTime, Integer, String, func
+from sqlalchemy import Column, DateTime, Integer, String, func, Boolean
 from sqlalchemy.orm import relationship
 from app.db.base import Base
 
@@ -13,3 +13,6 @@ class User(Base):
     created_at = Column(DateTime(timezone=True),server_default=func.now(),nullable=False)
     updated_at = Column(DateTime(timezone=True),server_default=func.now(),onupdate=func.now(),nullable=False)
     installations = relationship("Installation", back_populates="user")
+    is_active = Column(Boolean, default=True)
+    is_verified = Column(Boolean, default=True)
+

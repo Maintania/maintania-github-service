@@ -8,8 +8,8 @@ from itertools import combinations
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from huggingface_hub import login
 
-from app.services.github_client import get_installation_token
-from app.services.repo_cloner import embed
+from app.services.github.github_client import get_installation_token
+from app.services.repo.repo_cloner import embed
 
 from google import genai
 

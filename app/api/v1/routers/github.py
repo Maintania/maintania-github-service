@@ -6,21 +6,21 @@ from app.db.session import get_db
 from app.dependencies.auth import get_current_user
 from app.models.installation import Installation
 from app.models.repository import *
-from app.services.github_client import *
-from app.services.Issues import *
-from app.services.repository_service import sync_repositories
+from app.services.github.github_client import *
+from app.services.ai.issues import *
+from app.services.repo.repository_service import sync_repositories
 import jwt
 import time
 import requests
 from typing import Optional
 from pydantic import BaseModel,Field
-from app.services.labelling import *
-from app.services.repo_cloner import *
-from app.services.issue_solver import *
+from app.services.ai.labelling import *
+from app.services.repo.repo_cloner import *
+from app.services.ai.issue_solver import *
 from qdrant_client import QdrantClient
 from sentence_transformers import SentenceTransformer
 from qdrant_client.models import Filter, FieldCondition, MatchValue
-from app.services.incremental_indexer import *
+from app.services.repo.incremental_indexer import *
 import os
 
 

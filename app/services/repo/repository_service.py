@@ -1,7 +1,7 @@
 from sqlalchemy.orm import Session
 from app.models.repository import Repository
 from app.models.installation import Installation
-from app.services.github_client import get_installation_repos
+from app.services.github.github_client import get_installation_repos
 
 
 def sync_repositories(db: Session, installation: Installation):
