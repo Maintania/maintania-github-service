@@ -10,23 +10,94 @@ class RootCauseEngine:
         self.client = genai.Client(api_key=os.getenv("GEMINI_API_KEY"))
         self.model_name = model_name
 
-    def _format_context(self, repo_context):
+    # ---------------------------
+    # Context Formatting (Improved)
+    # ---------------------------
+    def _format_context(self, repo_context, max_chunks=6):
+        # sort by score if available
+        repo_context = sorted(
+            repo_context,
+            key=lambda x: x.get("score", 0),
+            reverse=True
+        )[:max_chunks]
+
         formatted = ""
+
         for i, chunk in enumerate(repo_context):
             formatted += f"\n--- FILE {i+1}: {chunk['file']} ---\n"
-            formatted += chunk["code"]
-            formatted += "\n"
+            formatted += f"Lines: {chunk.get('start_line', 0)}\n"
+            formatted += f"Type: {chunk.get('symbol_type', 'unknown')}\n"
+            formatted += f"Symbol: {chunk.get('symbol_name', 'unknown')}\n\n"
+
+            # truncate code to avoid token explosion
+            code = chunk["code"][:800]
+            formatted += code + "\n"
+
         return formatted
 
+    # ---------------------------
+    # Safer JSON Parsing
+    # ---------------------------
     def _safe_json_parse(self, text):
+        if not text:
+            raise ValueError("Empty response")
+
+        # remove markdown wrappers
+        text = text.strip()
+        text = text.replace("```json", "").replace("```", "").strip()
+
+        # try direct parse
         try:
             return json.loads(text)
-        except Exception:
-            match = re.search(r"\{[\s\S]*\}", text)
-            if match:
-                return json.loads(match.group(0))
-            raise
+        except:
+            pass
 
+        # fallback: extract largest JSON object
+        match = re.search(r"\{.*\}", text, re.S)
+        if match:
+            return json.loads(match.group(0))
+
+        raise ValueError("No valid JSON found")
+
+    # ---------------------------
+    # Confidence Calibration
+    # ---------------------------
+    def _compute_confidence(self, result):
+        score = 0.5
+
+        if result.get("likely_files"):
+            score += 0.2
+
+        if result.get("fix_strategy") and len(result["fix_strategy"]) > 40:
+            score += 0.2
+
+        if "function" in result.get("reasoning", "").lower():
+            score += 0.1
+
+        return round(min(score, 0.95), 2)
+
+    # ---------------------------
+    # Issue Structuring
+    # ---------------------------
+    def _structure_issue(self, title, body):
+        body = body[:600]
+
+        return f"""
+Problem:
+{title}
+
+Details:
+{body}
+
+Focus on:
+- failure behavior
+- affected logic
+- likely cause
+"""
+
+    # ---------------------------
+    # Main Analysis
+    # ---------------------------
     def analyze(self, issue_title, issue_body, repo_context, file_tree):
 
         if not repo_context:
@@ -35,75 +106,165 @@ class RootCauseEngine:
                 "likely_files": [],
                 "reasoning": "Phase 3 retrieval returned empty.",
                 "fix_strategy": "Increase retrieval depth.",
+                "agent_prompt": "",
                 "confidence": 0.0
             }
 
         formatted_context = self._format_context(repo_context)
+        structured_issue = self._structure_issue(issue_title, issue_body)
 
         prompt = f"""
-You are a senior software maintenance engineer.
+    You are a senior software maintenance engineer.
 
-Rules:
-- Only use provided repository context.
-- Do NOT invent files.
-- Only reference files that appear in REPOSITORY CONTEXT.
-- If insufficient data, say so.
-- Provide the suggested code changes in fix_strategy.
-- Return strict JSON only.
-- Keep it concise.
+    Follow a STRICT single chain of reasoning:
 
-ISSUE TITLE:
-{issue_title}
+    1. Identify the failure behavior
+    2. Map it to exact code (file + function/reducer)
+    3. Identify the precise logic/condition causing the issue
+    4. Explain WHY this logic causes the issue (mechanism)
+    5. Propose a concrete fix (include pseudo-code or code-level change)
 
-ISSUE DESCRIPTION:
-{issue_body}
+    Then generate an AGENT PROMPT that another AI can use to fix the bug.
 
-REPOSITORY CONTEXT:
-{formatted_context}
+    ------------------------
+    AGENT PROMPT REQUIREMENTS:
+    ------------------------
+    - Must describe the bug clearly
+    - Must reference exact file(s) and logic (function/reducer)
+    - Must include the exact logic that is wrong
+    - Must include the exact change required (pseudo-code allowed)
+    - Must be step-by-step
+    - Must be directly usable (copy-paste)
+    - Must NOT include meta text ("you are an AI")
+    - Must include expected outcome
 
-Return JSON:
+    ------------------------
+    STRICT RULES:
+    ------------------------
+    - ONLY use provided repository context
+    - DO NOT invent files or logic
+    - ONLY include directly responsible files
+    - Prefer specific functions over general files
+    - Identify exact faulty condition or logic
+    - Do NOT be vague
 
-{{
-  "root_cause_summary": "...",
-  "likely_files": ["..."],
-  "reasoning": "...",
-  "fix_strategy": "...",
-  "confidence": 0.0
-}}
-"""
-        token_info = self.client.models.count_tokens(
-            model=self.model_name,
-            contents=prompt
-        )
+    ------------------------
+    ISSUE:
+    {structured_issue}
 
-        input_tokens = token_info.total_tokens
+    ------------------------
+    REPOSITORY CONTEXT:
+    {formatted_context}
 
-        print(f"[LLM] Input tokens: {input_tokens}")
+    ------------------------
+    Strictly Return ONLY valid JSON. Do NOT wrap in markdown. Do NOT add explanation.
+    {{
+    "root_cause_summary": "...",
+    "likely_files": ["file_path"],
+    "reasoning": "Step-by-step chain: failure → code → faulty logic → why",
+    "fix_strategy": "Include exact code-level or pseudo-code fix",
+    "agent_prompt": "...",
+    "confidence": 0.0
+    }}
+    """
 
+        # ---------------------------
+        # Token Count
+        # ---------------------------
+        try:
+            token_info = self.client.models.count_tokens(
+                model=self.model_name,
+                contents=prompt
+            )
+            input_tokens = token_info.total_tokens
+            print(f"[LLM] Input tokens: {input_tokens}")
+        except:
+            input_tokens = None
+
+        # ---------------------------
+        # LLM Call
+        # ---------------------------
         response = self.client.models.generate_content(
             model=self.model_name,
             contents=prompt
         )
 
+        # extract output tokens safely
         try:
-            return self._safe_json_parse(response.text)
-        except json.JSONDecodeError:
+            output_tokens = response.usage_metadata.candidates_token_count
+        except:
+            output_tokens = None
+
+        try:
+            result = self._safe_json_parse(response.text)
+
+            # ---------------------------
+            # Validate agent prompt quality
+            # ---------------------------
+            agent_prompt = result.get("agent_prompt", "")
+
+            if not agent_prompt or len(agent_prompt) < 80:
+                result["agent_prompt"] = f"""
+    Fix a bug in the repository.
+
+    ISSUE:
+    {issue_title}
+
+    ROOT CAUSE:
+    {result.get("root_cause_summary", "")}
+
+    AFFECTED FILES:
+    {", ".join(result.get("likely_files", []))}
+
+    PROBLEM:
+    The current logic is incorrect and causing unintended behavior.
+
+    REQUIRED FIX:
+    {result.get("fix_strategy", "")}
+
+    INSTRUCTIONS:
+    1. Locate the relevant function/reducer in the specified file(s)
+    2. Identify the faulty logic
+    3. Modify the logic to restrict behavior to the correct scope
+    4. Ensure no unnecessary side effects
+    5. Validate behavior against expected outcome
+
+    EXPECTED RESULT:
+    Bug should be fixed and behavior should match intended design.
+    """.strip()
+
+            # ---------------------------
+            # Auto-calibrate confidence
+            # ---------------------------
+            result["confidence"] = self._compute_confidence(result)
+            result['llmoutput'] = response.text
+            if input_tokens:
+                result["input_tokens"] = input_tokens
+
+            if output_tokens:
+                result["output_tokens"] = output_tokens
+            return result
+
+        except Exception:
             return {
-                "root_cause_summary": "Invalid JSON from model.",
+                "root_cause_summary": "Failed to parse model output, raw response preserved.",
                 "likely_files": [],
                 "input_tokens": input_tokens,
-                "prompt":prompt,
-                "reasoning": response.text,
-                "fix_strategy": "Prompt tuning required.",
-                "confidence": 0.0
+                "output_tokens": output_tokens,
+                "reasoning": response.text[:2000],  # keep more for debugging
+                "fix_strategy": response.text[:2000],  # 🔥 FULL DEBUG COPY
+                "agent_prompt": "",
+                "confidence": 0.0,
+                "llmoutput": response.text
             }
         except Exception as e:
             return {
                 "root_cause_summary": "LLM failure.",
-                "prompt":prompt,
                 "likely_files": [],
                 "input_tokens": input_tokens,
                 "reasoning": str(e),
                 "fix_strategy": "Model or API failure.",
-                "confidence": 0.0
+                "agent_prompt": "",
+                "confidence": 0.0,
+                "llmoutput": response.text
             }

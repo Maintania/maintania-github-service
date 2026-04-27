@@ -15,4 +15,6 @@ class User(Base):
     installations = relationship("Installation", back_populates="user")
     is_active = Column(Boolean, default=True)
     is_verified = Column(Boolean, default=True)
+    is_deleted = Column(Boolean, default=False)
+    
 

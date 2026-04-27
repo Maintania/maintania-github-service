@@ -104,7 +104,7 @@ def extract_keywords(title: str, body: str, k=8):
 
     text = f"{title} {body}".lower()
 
-    words = re.findall(r"[a-z]{3,}", text)
+    words = re.findall(r"[a-zA-Z0-9_.:/-]{3,}", text)
 
     stop = {
         "this","that","with","from","have","your","will","when",
@@ -281,6 +281,113 @@ def github_recent_keyword_search(
         unique_candidates[c["number"]] = c
 
     return list(unique_candidates.values())
+
+
+
+def github_get_issue_details(
+    installation_id: int,
+    owner: str,
+    repo: str,
+    issue_number: int
+):
+    token = get_installation_token(installation_id)
+
+    headers = {
+        "Authorization": f"Bearer {token}",
+        "Accept": "application/vnd.github+json"
+    }
+
+    url = f"https://api.github.com/repos/{owner}/{repo}/issues/{issue_number}"
+
+    response = requests.get(url, headers=headers)
+
+    if response.status_code != 200:
+        raise Exception(
+            f"GitHub API error: {response.status_code} - {response.text}"
+        )
+
+    data = response.json()
+
+    return {
+        "id": data["id"],
+        "number": data["number"],
+        "title": data["title"],
+        "body": data.get("body") or "",
+        "state": data["state"],
+        "user": data["user"]["login"],
+        "labels": [label["name"] for label in data.get("labels", [])],
+        "comments_count": data["comments"],
+        "created_at": data["created_at"],
+        "updated_at": data["updated_at"],
+        "closed_at": data.get("closed_at"),
+        "html_url": data["html_url"]
+    }
+    
+
+
+
+def github_get_issue_comments(
+    installation_id: int,
+    owner: str,
+    repo: str,
+    issue_number: int,
+    per_page: int = 30,
+    max_comments: int = 100
+) -> List[Dict]:
+    """
+    Fetch comments for a GitHub issue.
+
+    Supports pagination and limits total comments fetched.
+    """
+
+    token = get_installation_token(installation_id)
+
+    headers = {
+        "Authorization": f"Bearer {token}",
+        "Accept": "application/vnd.github+json"
+    }
+
+    url = f"https://api.github.com/repos/{owner}/{repo}/issues/{issue_number}/comments"
+
+    comments = []
+    page = 1
+
+    while len(comments) < max_comments:
+
+        params = {
+            "per_page": per_page,
+            "page": page
+        }
+
+        response = requests.get(url, headers=headers, params=params)
+
+        if response.status_code != 200:
+            raise Exception(
+                f"GitHub API error: {response.status_code} - {response.text}"
+            )
+
+        data = response.json()
+
+        # No more comments
+        if not data:
+            break
+
+        for c in data:
+            comments.append({
+                "id": c["id"],
+                "user": c["user"]["login"],
+                "body": c.get("body") or "",
+                "created_at": c["created_at"],
+                "updated_at": c["updated_at"],
+                "html_url": c["html_url"]
+            })
+
+            if len(comments) >= max_comments:
+                break
+
+        page += 1
+
+    return comments
 
 
 def search_phrase(url, headers, owner, repo, phrase, per_query):

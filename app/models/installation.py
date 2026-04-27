@@ -1,4 +1,4 @@
-from sqlalchemy import Column, DateTime, Integer, String, ForeignKey, func
+from sqlalchemy import Column, DateTime, Integer, String, ForeignKey, func, Boolean
 from sqlalchemy.orm import relationship
 from app.db.base import Base
 
@@ -22,3 +22,4 @@ class Installation(Base):
 
     # Relationship to repositories
     repositories = relationship("Repository", back_populates="installation")
+    is_deleted = Column(Boolean, default=False)

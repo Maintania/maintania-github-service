@@ -20,3 +20,5 @@ class Repository(Base):
 
     # Relationship back to installation
     installation = relationship("Installation", back_populates="repositories")
+    is_deleted = Column(Boolean, default=False)
+

@@ -16,3 +16,4 @@ class Subscription(Base):
     end_date = Column(DateTime, nullable=True)
 
     cancel_at_period_end = Column(Boolean, default=False)
+    is_deleted = Column(Boolean, default=False)
