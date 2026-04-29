@@ -3,13 +3,13 @@ import requests
 import os
 import re
 from typing import List, Dict, Any
-
+from app.services.ai.llm_client import LLMClient
 # ================== CONFIG ==================
 
 LLM_API_KEY = os.getenv("GEMINI_API_KEY", "GEMINI_API_KEY")
 
 GEMINI_URL = "https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash-lite:generateContent"
-
+llm = LLMClient()
 LABEL_MAP = {
     "type": {
         "bug": ["bug"],
@@ -167,29 +167,21 @@ Issue Title:
 Issue Body:
 {truncated_body}
 """
-
-    payload = {
-        "contents": [{"parts": [{"text": prompt}]}],
-        "generationConfig": {
+    # ---------------------------
+    # LLM Call (with config)
+    # ---------------------------
+    response = llm.gemini_client.models.generate_content(
+        model="gemini-2.5-flash-lite",
+        contents=prompt,
+        config={
             "temperature": 0.1,
-            "maxOutputTokens": 300,
+            "max_output_tokens": 300,
             "response_mime_type": "application/json",
             "response_schema": response_schema
         }
-    }
-
-    response = requests.post(
-        GEMINI_URL,
-        params={"key": LLM_API_KEY},
-        json=payload,
-        timeout=30
     )
 
-    response.raise_for_status()
-
-    res_json = response.json()
-
-    raw_content = res_json["candidates"][0]["content"]["parts"][0]["text"]
+    raw_content = response.text
 
     return json.loads(raw_content)
 

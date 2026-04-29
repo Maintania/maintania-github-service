@@ -10,7 +10,7 @@ from huggingface_hub import login
 
 from app.services.github.github_client import get_installation_token
 from app.services.repo.repo_cloner import embed
-
+from app.services.ai.llm_client import LLMClient
 from google import genai
 
 
@@ -28,6 +28,7 @@ MAX_LLM_CHECK = 5
 client = genai.Client(api_key=GEMINI_API_KEY)
 MODEL_NAME = "gemini-2.5-flash-lite"
 
+llm = LLMClient()
 
 # ==========================
 # EMBEDDING
@@ -177,21 +178,21 @@ Body:
 
 Return JSON list only.
 """
-
+    # ---------------------------
+    # Token Count
+    # ---------------------------
     try:
-        token_count = client.models.count_tokens(model=MODEL_NAME, contents=prompt).total_tokens
-    except:
+        token_data = llm.count_tokens("gemini", MODEL_NAME, prompt)
+        token_count = token_data["total_tokens"]
+    except Exception:
         token_count = 0
-
     try:
-        r = requests.post(
-            GEMINI_URL,
-            params={"key": GEMINI_API_KEY},
-            json={"contents":[{"parts":[{"text":prompt}]}]},
-            timeout=20
-        )
+        # ---------------------------
+        # LLM Call
+        # ---------------------------
+        result_obj = llm.generate("gemini", MODEL_NAME, prompt)
+        text = result_obj["text"]
 
-        text = r.json()["candidates"][0]["content"]["parts"][0]["text"]
         return clean_llm_json(text), token_count
 
     except:
@@ -323,24 +324,29 @@ Mark duplicate=true ONLY if root cause is very likely identical.
 Return JSON:
 [{{"number": int, "duplicate": true/false}}]
 """
-
+    # ---------------------------
+    # Build Prompt
+    # ---------------------------
     for c in candidates:
         prompt += f"\nIssue {c['number']}: {c['title']} - {c['body'][:150]}"
 
+
+    # ---------------------------
+    # Token Count
+    # ---------------------------
     try:
-        token_count = client.models.count_tokens(model=MODEL_NAME, contents=prompt).total_tokens
-    except:
+        token_data = llm.count_tokens("gemini", MODEL_NAME, prompt)
+        token_count = token_data["total_tokens"]
+    except Exception:
         token_count = 0
 
-    try:
-        r = requests.post(
-            GEMINI_URL,
-            params={"key": GEMINI_API_KEY},
-            json={"contents":[{"parts":[{"text":prompt}]}]},
-            timeout=30
-        )
 
-        txt = r.json()["candidates"][0]["content"]["parts"][0]["text"]
+    # ---------------------------
+    # LLM Call
+    # ---------------------------
+    try:
+        result_obj = llm.generate("gemini", MODEL_NAME, prompt)
+        txt = result_obj["text"]
 
         match = re.search(r"\[.*?\]", txt, re.S)
         data = json.loads(match.group(0)) if match else []
@@ -350,8 +356,9 @@ Return JSON:
         for c in candidates:
             c["llm_duplicate"] = dup_map.get(c["number"], False)
 
-    except:
+    except Exception:
         pass
+
 
     return candidates, token_count
 

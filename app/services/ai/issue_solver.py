@@ -2,6 +2,7 @@ import json
 import os
 import re
 from google import genai
+from app.services.ai.llm_client import LLMClient
 
 
 class RootCauseEngine:
@@ -9,6 +10,7 @@ class RootCauseEngine:
     def __init__(self, model_name="gemini-2.5-flash"):
         self.client = genai.Client(api_key=os.getenv("GEMINI_API_KEY"))
         self.model_name = model_name
+        self.llm = LLMClient()
 
     # ---------------------------
     # Context Formatting (Improved)
@@ -172,32 +174,28 @@ Focus on:
         # Token Count
         # ---------------------------
         try:
-            token_info = self.client.models.count_tokens(
-                model=self.model_name,
-                contents=prompt
-            )
-            input_tokens = token_info.total_tokens
+            token_data = self.llm.count_tokens("gemini", self.model_name, prompt)
+            input_tokens = token_data["input_tokens"]
             print(f"[LLM] Input tokens: {input_tokens}")
-        except:
+        except Exception:
             input_tokens = None
+
 
         # ---------------------------
         # LLM Call
         # ---------------------------
-        response = self.client.models.generate_content(
-            model=self.model_name,
-            contents=prompt
-        )
+        result_obj = self.llm.generate("gemini", self.model_name, prompt)
+
+        response_text = result_obj["text"]
 
         # extract output tokens safely
         try:
-            output_tokens = response.usage_metadata.candidates_token_count
+            output_tokens = result_obj.get("usage", None)
         except:
             output_tokens = None
 
         try:
-            result = self._safe_json_parse(response.text)
-
+            result = self._safe_json_parse(response_text)
             # ---------------------------
             # Validate agent prompt quality
             # ---------------------------
@@ -237,7 +235,7 @@ Focus on:
             # Auto-calibrate confidence
             # ---------------------------
             result["confidence"] = self._compute_confidence(result)
-            result['llmoutput'] = response.text
+            result['llmoutput'] = result
             if input_tokens:
                 result["input_tokens"] = input_tokens
 
@@ -251,11 +249,11 @@ Focus on:
                 "likely_files": [],
                 "input_tokens": input_tokens,
                 "output_tokens": output_tokens,
-                "reasoning": response.text[:2000],  # keep more for debugging
-                "fix_strategy": response.text[:2000],  # 🔥 FULL DEBUG COPY
+                "reasoning": response_text[:2000],  # keep more for debugging
+                "fix_strategy": response_text[:2000],  # 🔥 FULL DEBUG COPY
                 "agent_prompt": "",
                 "confidence": 0.0,
-                "llmoutput": response.text
+                "llmoutput": response_text
             }
         except Exception as e:
             return {
@@ -266,5 +264,5 @@ Focus on:
                 "fix_strategy": "Model or API failure.",
                 "agent_prompt": "",
                 "confidence": 0.0,
-                "llmoutput": response.text
+                "llmoutput": response_text
             }

@@ -14,8 +14,8 @@ token_service = TokenService()
 
 def get_current_user(request: Request, db: Session = Depends(get_db)):
 
-    # token = request.cookies.get("session")
-    token = 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJ1c2VyX2lkIjoxLCJleHAiOjE3NzcxOTk0NzMsImp0aSI6Ijg1Mjk0NDhiLWRiNWMtNDM0Yi1hZDdhLTg2MWRlNmM4N2UzMiJ9.fbYYmIl_RSMoCXcORNY3XC_wsXWZvNJ59vuHJ2YtC54'
+    token = request.cookies.get("session")
+    # token = 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJ1c2VyX2lkIjoxLCJleHAiOjE3NzcxOTk0NzMsImp0aSI6Ijg1Mjk0NDhiLWRiNWMtNDM0Yi1hZDdhLTg2MWRlNmM4N2UzMiJ9.fbYYmIl_RSMoCXcORNY3XC_wsXWZvNJ59vuHJ2YtC54'
 
     if not token:
         raise HTTPException(status_code=401, detail="Not authenticated")

@@ -26,6 +26,7 @@ from qdrant_client.models import (
 from app.services.github.github_client import get_installation_token
 import torch
 from google import genai
+from app.services.ai.llm_client import LLMClient
 
 # ===============================
 # GPU TOGGLE
@@ -35,6 +36,7 @@ GEMINI_API_KEY = os.getenv("GEMINI_API_KEY")
 GEMINI_URL = "https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash-lite:generateContent"
 client = genai.Client(api_key=GEMINI_API_KEY)
 
+llm = LLMClient()
 
 if USE_GPU and torch.cuda.is_available():
     DEVICE = "cuda"
@@ -239,50 +241,52 @@ class RepoIntelligenceEngine:
         Strictly return JSON list:
         [".ext1", ".ext2"]
         """
-
         token_count = 0
 
+        # ---------------------------
+        # Token Count
+        # ---------------------------
         try:
-            token_info = client.models.count_tokens(
-                model = GEMINI_MODEL,
-                contents=prompt
-            )
-            print("Gemini extension filter tokens:", token_info.total_tokens)
-            token_count = token_info.total_tokens
+            token_data = llm.count_tokens("gemini", GEMINI_MODEL, prompt)
+            token_count = token_data["total_tokens"]
+            print("Gemini extension filter tokens:", token_count)
         except Exception as e:
             print("Token count failed:", e)
 
-        payload = {
-            "contents": [{"parts": [{"text": prompt}]}],
-            "generationConfig": {
-                "temperature": 0,
-                "maxOutputTokens": 100
-            }
-        }
 
+        # ---------------------------
+        # LLM Call (with retry)
+        # ---------------------------
         try:
+            result_obj = None
+
             for _ in range(2):
                 try:
-                    r = requests.post(
-                        GEMINI_URL,
-                        params={"key": GEMINI_API_KEY},
-                        json=payload,
-                        timeout=20
+                    result_obj = llm.generate(
+                        "gemini",
+                        GEMINI_MODEL,
+                        prompt,
+                        config={
+                            "temperature": 0,
+                            "max_output_tokens": 100
+                        }
                     )
                     break
-                except:
+                except Exception:
                     time.sleep(1)
 
-            text = r.json()["candidates"][0]["content"]["parts"][0]["text"]
+            if not result_obj:
+                return [], token_count
 
+            text = result_obj["text"]
             print("Raw Gemini response:", text)
 
             llm_output = clean_llm_json(text)
-            
+
             if not isinstance(llm_output, list):
                 return [], token_count
-            
-            valid_input = set(extensions)  # original input list
+
+            valid_input = set(extensions)
 
             filtered = [
                 e.lower()
@@ -291,7 +295,6 @@ class RepoIntelligenceEngine:
             ]
 
             return filtered, token_count
-            # normalize
 
         except Exception as e:
             print("LLM extension filter failed:", e)
@@ -299,6 +302,7 @@ class RepoIntelligenceEngine:
         
     
     def ask_llm_for_extensions(self, extensions):
+        
         if not extensions:
             return set()
 
