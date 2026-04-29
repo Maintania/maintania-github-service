@@ -7,7 +7,7 @@ from app.dependencies.auth import get_current_user
 from app.models.installation import Installation
 from app.models.repository import *
 from app.services.github.github_client import *
-from app.services.ai.issues import *
+from app.services.ai.issues_copy import *
 from app.services.repo.repository_service import sync_repositories
 import jwt
 import time
@@ -21,6 +21,7 @@ from qdrant_client import QdrantClient
 from sentence_transformers import SentenceTransformer
 from qdrant_client.models import Filter, FieldCondition, MatchValue
 from app.services.repo.incremental_indexer import *
+from fastapi import BackgroundTasks
 import os
 
 
@@ -32,23 +33,103 @@ client = QdrantClient(
 
 router = APIRouter()
 
-@router.get("/setup")
-def github_setup(installation_id: str, user = Depends(get_current_user), db: Session = Depends(get_db)):
 
-    existing = db.query(Installation).filter(
-        Installation.installation_id == installation_id,
-        Installation.user_id == user.id
+def sync_all_repos_for_installation(installation_id: int):
+    from app.db.session import SessionLocal
+    db = SessionLocal()
+
+    try:
+        installation = db.query(Installation).filter_by(id=installation_id, is_deleted=False).first()
+
+        if not installation:
+            return
+
+        print(f"[Setup Sync] Installation: {installation_id}")
+
+        for repo in installation.repositories:
+            try:
+                owner, repo_name = repo.full_name.split("/")
+
+                print(f"[Syncing Repo] {owner}/{repo_name}")
+
+                payload = SyncRepoPayload(
+                    installation_id=installation.installation_id,
+                    owner=owner,
+                    repo=repo_name,
+                    branch=None,       # auto resolve
+                    pr_number=None     # normal sync
+                )
+
+                # 🔥 CALL YOUR EXISTING PIPELINE
+                sync_repo(payload)
+
+            except Exception as e:
+                print(f"[Sync Error] {repo.full_name}: {e}")
+
+    finally:
+        db.close()
+       
+        
+@router.get("/setup")
+def github_setup(
+    installation_id: str,
+    background_tasks: BackgroundTasks,
+    db: Session = Depends(get_db)
+):
+    user_id = 1  # temp
+
+    installation = db.query(Installation).filter(
+        Installation.installation_id == installation_id
     ).first()
 
-    if not existing:
+    if not installation:
         installation = Installation(
             installation_id=installation_id,
-            user_id=user.id
+            user_id=user_id
         )
         db.add(installation)
         db.commit()
-    sync_repositories(db, installation)
+        db.refresh(installation)
+
+    # ✅ Step 1: fetch repos from GitHub
+    response = get_installation_repos(installation_id)
+    repos = response.get("repositories", [])
+    # ✅ Step 2: enforce uniqueness (IMPORTANT 🔥)
+    for repo in repos:
+        full_name = repo["full_name"]
+
+        existing_repo = db.query(Repository).filter(
+            Repository.full_name == full_name
+        ).first()
+
+        if existing_repo:
+            if existing_repo.installation_id != installation.id:
+                print(f"[Reassign Repo] {full_name}")
+
+                # ❌ delete old mapping
+                db.delete(existing_repo)
+                db.commit()
+
+        # ✅ upsert repo
+        new_repo = Repository(
+            installation_id=installation.id,
+            name=repo["name"],
+            full_name=full_name,
+            private=repo["private"]
+        )
+
+        db.merge(new_repo)
+
+    db.commit()
+
+    # ✅ Step 3: trigger background sync (incremental-safe)
+    background_tasks.add_task(
+        sync_all_repos_for_installation,
+        installation.id
+    )
+
     return RedirectResponse(f"{settings.FRONTEND_URL}/dashboard")
+
 
 # get installation id from github callback query 
 @router.post("/webhook")
@@ -398,25 +479,61 @@ class AnalyzeIssuePayload(BaseModel):
     owner: str
     repo: str
     issue_number: int
-    issue_title: str
-    issue_body: Optional[str] = ""
-
+    # issue_title: str
+    # issue_body: Optional[str] = ""
 
 @router.post("/analyze-issue")
 def test_maintania_pipeline(payload: AnalyzeIssuePayload):
 
     # ----------------------------
+    # Phase 0 — Fetch Issue From GitHub (SOURCE OF TRUTH)
+    # ----------------------------
+    issue = github_get_issue_details(
+        installation_id=payload.installation_id,
+        owner=payload.owner,
+        repo=payload.repo,
+        issue_number=payload.issue_number
+    )
+
+    issue_title = issue["title"]
+    issue_body = issue["body"]
+
+    # OPTIONAL: fetch comments (recommended)
+    comments = github_get_issue_comments(
+        installation_id=payload.installation_id,
+        owner=payload.owner,
+        repo=payload.repo,
+        issue_number=payload.issue_number
+    )
+
+    # Merge comments into context (limit to avoid token explosion)
+    comments_text = "\n\n".join(
+        [c["body"] for c in comments[:5]]
+    )
+
+    # enriched_body = f"""
+    # {issue_body}
+
+    # --- Comments ---
+    # {comments_text}
+    # """
+    
+    enriched_body = f"""
+    {issue_body}
+    """
+
+    # ----------------------------
     # Phase 1 — Issue Classification
     # ----------------------------
-    classification = classify_issue(payload.issue_title, payload.issue_body)
+    classification = classify_issue(issue_title, enriched_body)
 
     # ----------------------------
     # Phase 2 — Find Similar Fixes
     # ----------------------------
     results = maintania_find_similar_fixes(
         installation_id=payload.installation_id,
-        title=payload.issue_title,
-        body=payload.issue_body,
+        title=issue_title,
+        body=enriched_body,
         owner=payload.owner,
         repo=payload.repo,
         issue_number=payload.issue_number,
@@ -426,16 +543,14 @@ def test_maintania_pipeline(payload: AnalyzeIssuePayload):
     # ----------------------------
     # Phase 3 — Retrieve Relevant Code From Vector DB
     # ----------------------------
-
     query = f"""
-    
     Bug Report
     Title:
-    {payload.issue_title}
+    {issue_title}
 
     Description:
-    {payload.issue_body}
-    
+    {enriched_body}
+
     Find code responsible for this issue.
     """
 
@@ -447,7 +562,6 @@ def test_maintania_pipeline(payload: AnalyzeIssuePayload):
         collection_name="repo_code_embeddings",
         query=query_vector,
         limit=10,
-
         query_filter=Filter(
             must=[
                 FieldCondition(
@@ -461,7 +575,6 @@ def test_maintania_pipeline(payload: AnalyzeIssuePayload):
     repo_context = []
 
     for r in search_results.points:
-
         repo_context.append({
             "file": r.payload.get("file"),
             "code": r.payload.get("code"),
@@ -471,24 +584,24 @@ def test_maintania_pipeline(payload: AnalyzeIssuePayload):
     # ----------------------------
     # Phase 4 — Root Cause Analysis
     # ----------------------------
-
     root_engine = RootCauseEngine()
 
     analysis = root_engine.analyze(
-        payload.issue_title,
-        payload.issue_body,
+        issue_title,
+        enriched_body,
         repo_context,
         None
     )
 
     return {
-        "label":classification,
+        "label": classification,
         "issue_number": payload.issue_number,
+        "issue_title": issue_title,
+        "issue_url": issue["html_url"],
         "similar_fixes": results,
         "repo_context": repo_context,
         "analysis": analysis
-    }
-    
+    }  
 
 
 # -----------------------------

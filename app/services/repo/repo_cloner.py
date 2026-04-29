@@ -4,6 +4,7 @@ import shutil
 import uuid
 import json
 import time
+import re
 from datetime import datetime, timezone
 import requests
 import yaml
@@ -44,7 +45,7 @@ else:
 
 
 MODEL_NAME = "BAAI/bge-small-en-v1.5"
-
+GEMINI_MODEL = "gemini-2.5-flash-lite"
 CHUNK_SIZE = 1500
 CHUNK_OVERLAP = 200
 
@@ -80,16 +81,18 @@ def embed(texts):
     )
 
 def clean_llm_json(text: str):
-
     text = text.strip()
+    text = text.replace("```json", "").replace("```", "").strip()
 
-    # remove markdown code blocks
-    text = text.replace("```json", "")
-    text = text.replace("```", "")
-
-    text = text.strip()
-
-    return json.loads(text)
+    try:
+        return json.loads(text)
+    except:
+        match = re.search(r"\[[\s\S]*\]", text)
+        if match:
+            return json.loads(match.group(0))
+        return []
+    
+    
 def load_extension_map():
 
     if os.path.exists(LINGUIST_CACHE):
@@ -213,7 +216,7 @@ class RepoIntelligenceEngine:
     def llm_filter_extensions(self,extensions: list[str]):
 
         if not GEMINI_API_KEY:
-            return []
+            return [],0
         print(f'Extension filtering with {len(extensions)} extensions: {", ".join(extensions)}')
         prompt = f"""
         Given these file extensions from a GitHub repository:
@@ -241,7 +244,7 @@ class RepoIntelligenceEngine:
 
         try:
             token_info = client.models.count_tokens(
-                model=MODEL_NAME,
+                model = GEMINI_MODEL,
                 contents=prompt
             )
             print("Gemini extension filter tokens:", token_info.total_tokens)
@@ -258,18 +261,26 @@ class RepoIntelligenceEngine:
         }
 
         try:
-            r = requests.post(
-                GEMINI_URL,
-                params={"key": GEMINI_API_KEY},
-                json=payload,
-                timeout=20
-            )
+            for _ in range(2):
+                try:
+                    r = requests.post(
+                        GEMINI_URL,
+                        params={"key": GEMINI_API_KEY},
+                        json=payload,
+                        timeout=20
+                    )
+                    break
+                except:
+                    time.sleep(1)
 
             text = r.json()["candidates"][0]["content"]["parts"][0]["text"]
 
             print("Raw Gemini response:", text)
 
             llm_output = clean_llm_json(text)
+            
+            if not isinstance(llm_output, list):
+                return [], token_count
             
             valid_input = set(extensions)  # original input list
 
@@ -649,7 +660,7 @@ class RepoIntelligenceEngine:
 
         payload["repo"] = f"{owner}/{repo}"
         payload["branch"] = branch
-
+        
         self.qdrant.upsert(
             collection_name=self.state_collection,
             points=[
@@ -813,7 +824,8 @@ class RepoIntelligenceEngine:
             for i, future in enumerate(as_completed(futures), 1):
 
                 chunks, metas = future.result()
-
+                lang = metas[0]["language"] if metas else "unknown"
+                language_counts[lang] = language_counts.get(lang, 0) + 1
                 buffer_chunks.extend(chunks)
                 buffer_meta.extend(metas)
 
@@ -851,39 +863,47 @@ class RepoIntelligenceEngine:
             "languages": language_counts,
             "duration_sec": index_duration
         }, True
-
     def _process_batch(self, chunks, metadata):
 
         embeddings = embed(chunks)
-
         embeddings = np.array(embeddings).astype("float32")
 
-        points = []
+        batch_size = 100  # 🔥 tune this (100–500 ideal)
 
-        for i, vector in enumerate(embeddings):
+        for start in range(0, len(embeddings), batch_size):
 
-            points.append(
-                PointStruct(
-                    id=str(uuid.uuid4()),
-                    vector=vector.tolist(),
-                    payload={
-                        "repo": metadata[i]["repo"],
-                        "branch": metadata[i]["branch"],
-                        "file": metadata[i]["file"],
-                        "language": metadata[i]["language"],
-                        "symbol_type": metadata[i]["symbol_type"],
-                        "start_line": metadata[i]["start_line"],
-                        "code": chunks[i]
-                    }
+            end = start + batch_size
+
+            batch_vectors = embeddings[start:end]
+            batch_chunks = chunks[start:end]
+            batch_meta = metadata[start:end]
+
+            points = []
+
+            for i, vector in enumerate(batch_vectors):
+                points.append(
+                    PointStruct(
+                        id=str(uuid.uuid4()),
+                        vector=vector.tolist(),
+                        payload={
+                            "repo": batch_meta[i]["repo"],
+                            "branch": batch_meta[i]["branch"],
+                            "file": batch_meta[i]["file"],
+                            "language": batch_meta[i]["language"],
+                            "symbol_type": batch_meta[i]["symbol_type"],
+                            "start_line": batch_meta[i]["start_line"],
+                            "code": batch_chunks[i]
+                        }
+                    )
                 )
-            )
 
-        self.qdrant.upsert(
-            collection_name=self.collection_name,
-            points=points,
-            wait=False   # ASYNC WRITE
-        )
-        
+            # 🚀 batched upsert
+            self.qdrant.upsert(
+                collection_name=self.collection_name,
+                points=points,
+                wait=True
+            )
+            
     def safe_process_batch(self, chunks, meta):
         try:
             self._process_batch(chunks, meta)
@@ -938,10 +958,15 @@ class RepoIntelligenceEngine:
         # -----------------------------
         # Validate token
         # -----------------------------
-        test_resp = requests.get("https://api.github.com/user", headers=headers)
-        if test_resp.status_code != 200:
-            raise Exception(f"GitHub token invalid: {test_resp.status_code} {test_resp.text}")
+        # test_resp = requests.get("https://api.github.com/user", headers=headers)
+        # if test_resp.status_code != 200:
+        #     raise Exception(f"GitHub token invalid: {test_resp.status_code} {test_resp.text}")
+        repo_api = f"https://api.github.com/repos/{owner}/{repo}"
 
+        response = requests.get(repo_api, headers=headers)
+
+        if response.status_code != 200:
+            raise Exception(f"Repo access failed: {response.status_code} {response.text}")
         # -----------------------------
         # Validate repo access
         # -----------------------------

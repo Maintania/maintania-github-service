@@ -57,7 +57,7 @@ async def callback(code: str, db: Session = Depends(get_db)):
 
     github_id = str(user_res["id"])
 
-    user = db.query(User).filter(User.github_id == github_id).first()
+    user = db.query(User).filter(User.github_id == github_id,is_deleted=False).first()
 
     if not user:
         user = User(

@@ -19,3 +19,4 @@ class Plan(Base):
     max_requests = Column(Integer, default=100)
 
     is_active = Column(Boolean, default=True)
+    is_deleted = Column(Boolean, default=False)
