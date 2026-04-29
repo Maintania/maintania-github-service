@@ -78,7 +78,7 @@ async def callback(code: str, db: Session = Depends(get_db)):
         "user_id": user.id
     })
 
-    response = RedirectResponse(f"{settings.FRONTEND_URL}/dashboard")
+    response = RedirectResponse(f"{settings.FRONTEND_URL}/repositeries")
 
     response.set_cookie(
         key="session",
