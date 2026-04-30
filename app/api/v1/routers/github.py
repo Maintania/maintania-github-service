@@ -36,6 +36,24 @@ client = QdrantClient(
 
 router = APIRouter()
 
+@router.get("/github/setup")
+def setup(
+    installation_id: str,
+    user = Depends(get_current_user),
+    db: Session = Depends(get_db)
+):
+    installation = db.query(Installation).filter(
+        Installation.installation_id == installation_id
+    ).first()
+
+    if not installation:
+        raise HTTPException(404, "Installation not found")
+
+    installation.user_id = user.id
+    db.commit()
+
+    return RedirectResponse(f"{settings.FRONTEND_URL}/repositeries")
+
 def verify_signature(payload_body: bytes, signature: str, secret: str):
     if not signature:
         return False
