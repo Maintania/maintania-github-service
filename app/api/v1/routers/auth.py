@@ -57,8 +57,10 @@ async def callback(code: str, db: Session = Depends(get_db)):
 
     github_id = str(user_res["id"])
 
-    user = db.query(User).filter(User.github_id == github_id,is_deleted=False).first()
-
+    user = db.query(User).filter(
+        User.github_id == github_id
+    ).first()
+    
     if not user:
         user = User(
             github_id=github_id,
@@ -84,8 +86,8 @@ async def callback(code: str, db: Session = Depends(get_db)):
         key="session",
         value=token,
         httponly=True,
-        secure=False,       # 🔁 change to True in production
-        samesite="lax",     # 🔁 change to "none" in production
+        secure=False,          # REQUIRED for SameSite=None
+        samesite="lax",      # REQUIRED for cross-site
         path="/",
         max_age=60 * 60 * 24
     )

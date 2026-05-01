@@ -23,7 +23,7 @@ from qdrant_client.models import Filter, FieldCondition, MatchValue
 from app.services.repo.incremental_indexer import *
 from fastapi import BackgroundTasks
 import os
-
+from app.models.issue import Issue
 
 
 client = QdrantClient(
@@ -482,8 +482,12 @@ class AnalyzeIssuePayload(BaseModel):
     # issue_title: str
     # issue_body: Optional[str] = ""
 
+
 @router.post("/analyze-issue")
-def test_maintania_pipeline(payload: AnalyzeIssuePayload):
+def test_maintania_pipeline(payload: AnalyzeIssuePayload, db: Session = Depends(get_db)):
+
+    start_time = time.time()
+    
 
     # ----------------------------
     # Phase 0 — Fetch Issue From GitHub (SOURCE OF TRUTH)
@@ -592,7 +596,72 @@ def test_maintania_pipeline(payload: AnalyzeIssuePayload):
         repo_context,
         None
     )
+    end_time = time.time()
+    fetch_time_ms = (end_time - start_time) * 1000    
+    
+    # ----------------------------
+    # 💾 SAVE TO DB
+    # ----------------------------
 
+    # -----------------------------------
+    # STEP 1: Get Installation (DB ID)
+    # -----------------------------------
+    installation = db.query(Installation).filter(
+        Installation.installation_id == str(payload.installation_id),
+        Installation.is_deleted == False
+    ).first()
+
+    if not installation:
+        raise HTTPException(status_code=404, detail="Installation not found")
+
+    # -----------------------------------
+    # STEP 2: Get Repository using DB FK
+    # -----------------------------------
+    repository = db.query(Repository).filter(
+        Repository.full_name == repo_full_name,
+        Repository.installation_id == installation.id,  # ✅ FIXED
+        Repository.is_deleted == False
+    ).first()
+
+    if not repository:
+        raise HTTPException(status_code=404, detail="Repository not found")
+    last_issue = db.query(Issue).filter(
+        Issue.repository_id == repository.id,
+        Issue.issue_number == payload.issue_number
+    ).order_by(Issue.version.desc()).first()
+    
+    if last_issue:
+    # mark old as not latest
+        last_issue.is_latest = 0
+        new_version = last_issue.version + 1
+    else:
+        new_version = 1
+    
+    db_issue = Issue(
+        repository_id=repository.id,
+        issue_number=payload.issue_number,
+        version=new_version,
+
+        title=issue_title,
+        body=issue_body,
+        issue_url=issue["html_url"],
+        comments=comments_text,
+
+        classification=classification,
+        similar_fixes=results,
+        repo_context=repo_context,
+        analysis=analysis,
+
+        fetch_time_ms=fetch_time_ms,
+        is_latest=1
+    )
+
+    db.add(db_issue)
+    db.commit()
+    db.refresh(db_issue)
+
+
+    
     return {
         "label": classification,
         "issue_number": payload.issue_number,
@@ -788,22 +857,21 @@ class RepoStatsRequest(BaseModel):
 
 
 @router.get("/repo-stats")
-def repo_stats(request: RepoStatsRequest):
+def repo_stats(request: RepoStatsRequest, db: Session = Depends(get_db)):
     engine = RepoIntelligenceEngine()
     engine.create_state_collection()
+
     owner = request.owner
     repo = request.repo
     branch = request.branch
-    limit = request.limit
-    offset = request.offset
+    limit = request.limit or 10
+    offset = request.offset or 0
+
     # -----------------------------------
     # VALIDATION
     # -----------------------------------
     if not owner:
-        raise HTTPException(
-            status_code=400,
-            detail="owner is required"
-        )
+        raise HTTPException(status_code=400, detail="owner is required")
 
     # -----------------------------------
     # CASE 3: owner + repo + branch
@@ -817,9 +885,48 @@ def repo_stats(request: RepoStatsRequest):
                 detail="Repository state not found"
             )
 
+        # 🔥 Attach DB data
+        repo_full_name = f"{owner}/{repo}"
+
+        repo_obj = db.query(Repository).filter(
+            Repository.full_name == repo_full_name,
+            Repository.is_deleted == False
+        ).first()
+
+        issues_data = []
+
+        if repo_obj:
+            issues = db.query(Issue).filter(
+                Issue.repository_id == repo_obj.id,
+                Issue.is_latest == 1
+            ).all()
+
+            issues_data = [
+                {
+                    "issue_number": i.issue_number,
+                    "version": i.version,
+                    "title": i.title,
+                    "classification": i.classification,
+                    "analysis": i.analysis,
+                    "created_at": i.created_at
+                }
+                for i in issues
+            ]
+
+        enriched_record = {
+            **record,
+            "repository": {
+                "id": repo_obj.id if repo_obj else None,
+                "private": repo_obj.private if repo_obj else None,
+                "created_at": repo_obj.created_at if repo_obj else None,
+                "updated_at": repo_obj.updated_at if repo_obj else None
+            } if repo_obj else None,
+            "issues": issues_data
+        }
+
         return {
             "count": 1,
-            "items": [record],
+            "items": [enriched_record],
             "pagination": {
                 "limit": limit,
                 "offset": offset,
@@ -832,9 +939,9 @@ def repo_stats(request: RepoStatsRequest):
         }
 
     # -----------------------------------
-    # FETCH ALL (will filter below)
+    # FETCH ALL FROM QDRANT
     # -----------------------------------
-    records = []
+    records: List[Dict] = []
     next_offset = None
     cursor = None
 
@@ -852,8 +959,7 @@ def repo_stats(request: RepoStatsRequest):
 
         for p in points:
             payload = p.payload or {}
-
-            repo_name = payload.get("repo")  # format: owner/repo
+            repo_name = payload.get("repo")  # owner/repo
 
             if not repo_name:
                 continue
@@ -863,16 +969,12 @@ def repo_stats(request: RepoStatsRequest):
             except ValueError:
                 continue
 
-            # -----------------------------------
             # CASE 1: owner only
-            # -----------------------------------
             if owner and not repo:
                 if payload_owner != owner:
                     continue
 
-            # -----------------------------------
             # CASE 2: owner + repo
-            # -----------------------------------
             elif owner and repo and not branch:
                 if payload_owner != owner or payload_repo != repo:
                     continue
@@ -883,12 +985,85 @@ def repo_stats(request: RepoStatsRequest):
             break
 
     # -----------------------------------
+    # 🔥 BATCH FETCH REPOSITORIES
+    # -----------------------------------
+    repo_keys = list(set(item["repo"] for item in records if item.get("repo")))
+
+    db_repos = db.query(Repository).filter(
+        Repository.full_name.in_(repo_keys),
+        Repository.is_deleted == False
+    ).all()
+
+    repo_map = {r.full_name: r for r in db_repos}
+
+    # -----------------------------------
+    # 🔥 FETCH LATEST ISSUES
+    # -----------------------------------
+    repo_ids = [r.id for r in db_repos]
+
+    issues = db.query(Issue).filter(
+        Issue.repository_id.in_(repo_ids),
+        Issue.is_latest == 1
+    ).all()
+
+    issues_map: Dict[int, List[Issue]] = {}
+
+    for issue in issues:
+        issues_map.setdefault(issue.repository_id, []).append(issue)
+
+    # -----------------------------------
+    # 🔥 ENRICH RECORDS
+    # -----------------------------------
+    enriched_records = []
+
+    for item in records:
+        repo_name = item.get("repo")
+        repo_obj = repo_map.get(repo_name)
+
+        if not repo_obj:
+            continue
+
+        repo_issues = issues_map.get(repo_obj.id, [])
+
+        enriched_item = {
+            **item,
+
+            "repository": {
+                "id": repo_obj.id,
+                "name": repo_obj.name,
+                "full_name": repo_obj.full_name,
+                "private": repo_obj.private,
+                "created_at": repo_obj.created_at,
+                "updated_at": repo_obj.updated_at
+            },
+
+            "issues": [
+                {
+                    "issue_number": i.issue_number,
+                    "version": i.version,
+                    "title": i.title,
+                    "classification": i.classification,
+                    "analysis": i.analysis,
+                    "created_at": i.created_at
+                }
+                for i in repo_issues
+            ],
+
+            # 🔥 optional useful stats
+            "issue_stats": {
+                "total": len(repo_issues)
+            }
+        }
+
+        enriched_records.append(enriched_item)
+
+    # -----------------------------------
     # PAGINATION + AGGREGATION
     # -----------------------------------
-    total_repos = len(records)
-    total_chunks = sum(int(item.get("total_chunks") or 0) for item in records)
+    total_repos = len(enriched_records)
+    total_chunks = sum(int(item.get("total_chunks") or 0) for item in enriched_records)
 
-    page_items = records[offset:offset + limit]
+    page_items = enriched_records[offset:offset + limit]
 
     if offset + limit < total_repos:
         next_offset = offset + limit
