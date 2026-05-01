@@ -135,7 +135,7 @@ def github_setup(
         installation.id
     )
 
-    return RedirectResponse(f"{settings.FRONTEND_URL}/dashboard")
+    return RedirectResponse(f"{settings.FRONTEND_URL}/repositeries")
 
 
 
