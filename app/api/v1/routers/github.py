@@ -1,3 +1,5 @@
+import hashlib
+import hmac
 from fastapi import APIRouter, Depends, HTTPException, Request, Query
 from sqlalchemy.orm import Session
 from starlette.responses import RedirectResponse
@@ -8,7 +10,7 @@ from app.models.installation import Installation
 from app.models.repository import *
 from app.services.github.github_client import *
 from app.services.ai.issues_copy import *
-from app.services.repo.repository_service import sync_repositories
+from app.services.repo.repository_service import sync_repositories  
 import jwt
 import time
 import requests
@@ -21,6 +23,7 @@ from qdrant_client import QdrantClient
 from sentence_transformers import SentenceTransformer
 from qdrant_client.models import Filter, FieldCondition, MatchValue
 from app.services.repo.incremental_indexer import *
+from app.db.session import SessionLocal
 from fastapi import BackgroundTasks
 import os
 from app.models.issue import Issue
@@ -33,159 +36,180 @@ client = QdrantClient(
 
 router = APIRouter()
 
-
-def sync_all_repos_for_installation(installation_id: int):
-    from app.db.session import SessionLocal
-    db = SessionLocal()
-
-    try:
-        installation = db.query(Installation).filter_by(id=installation_id, is_deleted=False).first()
-
-        if not installation:
-            return
-
-        print(f"[Setup Sync] Installation: {installation_id}")
-
-        for repo in installation.repositories:
-            try:
-                owner, repo_name = repo.full_name.split("/")
-
-                print(f"[Syncing Repo] {owner}/{repo_name}")
-
-                payload = SyncRepoPayload(
-                    installation_id=installation.installation_id,
-                    owner=owner,
-                    repo=repo_name,
-                    branch=None,       # auto resolve
-                    pr_number=None     # normal sync
-                )
-
-                # 🔥 CALL YOUR EXISTING PIPELINE
-                sync_repo(payload)
-
-            except Exception as e:
-                print(f"[Sync Error] {repo.full_name}: {e}")
-
-    finally:
-        db.close()
-       
-        
-@router.get("/setup")
-def github_setup(
+@router.get("/github/setup")
+def setup(
     installation_id: str,
-    background_tasks: BackgroundTasks,
+    user = Depends(get_current_user),
     db: Session = Depends(get_db)
 ):
-    user_id = 1  # temp
-
     installation = db.query(Installation).filter(
         Installation.installation_id == installation_id
     ).first()
 
     if not installation:
-        installation = Installation(
+        raise HTTPException(404, "Installation not found")
+
+    installation.user_id = user.id
+    db.commit()
+
+    return RedirectResponse(f"{settings.FRONTEND_URL}/repositeries")
+
+def verify_signature(payload_body: bytes, signature: str, secret: str):
+    if not signature:
+        return False
+
+    mac = hmac.new(secret.encode(), payload_body, hashlib.sha256)
+    expected = "sha256=" + mac.hexdigest()
+
+    return hmac.compare_digest(expected, signature)
+
+def fetch_repos(token: str):
+    url = "https://api.github.com/installation/repositories"
+
+    headers = {
+        "Authorization": f"Bearer {token}",
+        "Accept": "application/vnd.github+json"
+    }
+
+    res = requests.get(url, headers=headers)
+
+    if res.status_code != 200:
+        raise Exception(f"GitHub API error: {res.text}")
+
+    data = res.json()
+    return data.get("repositories", [])
+
+
+def upsert_repo(db, installation_id, repo):
+    full_name = repo["full_name"]
+
+    existing = db.query(Repository).filter(
+        Repository.full_name == full_name,
+        Repository.installation_id == installation_id
+    ).first()
+
+    if existing:
+        existing.name = repo["name"]
+        existing.private = repo["private"]
+    else:
+        db.add(Repository(
             installation_id=installation_id,
-            user_id=user_id
-        )
-        db.add(installation)
-        db.commit()
-        db.refresh(installation)
-
-    # ✅ Step 1: fetch repos from GitHub
-    response = get_installation_repos(installation_id)
-    repos = response.get("repositories", [])
-    # ✅ Step 2: enforce uniqueness (IMPORTANT 🔥)
-    for repo in repos:
-        full_name = repo["full_name"]
-
-        existing_repo = db.query(Repository).filter(
-            Repository.full_name == full_name
-        ).first()
-
-        if existing_repo:
-            if existing_repo.installation_id != installation.id:
-                print(f"[Reassign Repo] {full_name}")
-
-                # ❌ delete old mapping
-                db.delete(existing_repo)
-                db.commit()
-
-        # ✅ upsert repo
-        new_repo = Repository(
-            installation_id=installation.id,
             name=repo["name"],
             full_name=full_name,
             private=repo["private"]
-        )
-
-        db.merge(new_repo)
-
-    db.commit()
-
-    # ✅ Step 3: trigger background sync (incremental-safe)
-    background_tasks.add_task(
-        sync_all_repos_for_installation,
-        installation.id
-    )
-
-    return RedirectResponse(f"{settings.FRONTEND_URL}/dashboard")
+        ))
 
 
-# get installation id from github callback query 
-@router.post("/webhook")
-async def github_webhook(request: Request, db: Session = Depends(get_db)):
+def sync_installation_repos(installation_db_id: int):
+    db = SessionLocal()
 
-    payload = await request.json()
-    print("payload",payload)
-    event = request.headers.get("X-GitHub-Event")
-    print(payload)
-    if event == "installation":
+    try:
+        installation = db.query(Installation).filter(
+            Installation.id == installation_db_id
+        ).first()
 
-        action = payload.get("action")
-        installation = payload.get("installation")
+        if not installation:
+            return
 
-        installation_id = str(installation["id"])
-        account_login = installation["account"]["login"]
-        account_type = installation["account"]["type"]
+        token = get_installation_token(installation.installation_id)
+        repos = fetch_repos(token)
 
-        if action == "created":
+        incoming_full_names = set()
 
-            existing = db.query(Installation).filter(
-                Installation.installation_id == installation_id
-            ).first()
+        for repo in repos:
+            full_name = repo["full_name"]
+            incoming_full_names.add(full_name)
 
-            if not existing:
-                new_installation = Installation(
-                    installation_id=installation_id,
-                    account_login=account_login,
-                    account_type=account_type
-                )
-                db.add(new_installation)
+            upsert_repo(db, installation.id, repo)
 
-        elif action == "deleted":
-
+        if incoming_full_names:
             db.query(Repository).filter(
-                Repository.installation_id == installation_id
-            ).delete()
-            
-            db.query(Installation).filter(
-                Installation.installation_id == installation_id
-            ).delete()
-
-        elif action == "suspend":
-            print("Installation suspended:", installation_id)
-
-        elif action == "unsuspend":
-            print("Installation unsuspended:", installation_id)
+                Repository.installation_id == installation.id,
+                ~Repository.full_name.in_(incoming_full_names)
+            ).delete(synchronize_session=False)
 
         db.commit()
 
+    finally:
+        db.close()
+
+# only source of truth if the insatllation happend 
+
+@router.post("/webhook")
+async def github_webhook(request: Request,background_tasks: BackgroundTasks, db: Session = Depends(get_db)):
+
+    raw_body = await request.body()
+    signature = request.headers.get("X-Hub-Signature-256")
+
+    if not verify_signature(raw_body, signature, settings.GITHUB_WEBHOOK_SECRET):
+        raise HTTPException(401, "Invalid signature")
+
+    payload = await request.json()
+    event = request.headers.get("X-GitHub-Event")
+
+    installation_data = payload.get("installation")
+    installation_id = str(installation_data["id"]) if installation_data else None
+
+
+    # INSTALLATION CREATED
+
+    if event == "installation" and payload["action"] == "created":
+        installation = db.query(Installation).filter(
+            Installation.installation_id == installation_id
+        ).first()
+
+        if not installation:
+            installation = Installation(
+                installation_id=installation_id,
+                account_login=installation_data["account"]["login"],
+                account_type=installation_data["account"]["type"]
+            )
+            db.add(installation)
+            db.commit()
+            db.refresh(installation)
+
+       # async instead of blocking
+        background_tasks.add_task(sync_installation_repos, installation.id)
+
+  
+    # INSTALLATION DELETED
+    elif event == "installation" and payload["action"] == "deleted":
+
+        installation = db.query(Installation).filter(
+            Installation.installation_id == installation_id
+        ).first()
+
+        if installation:
+            db.query(Repository).filter(
+                Repository.installation_id == installation.id
+            ).delete()
+
+            db.delete(installation)
+            db.commit()
+
+    # REPO ADDED/REMOVED
     elif event == "installation_repositories":
 
-        action = payload.get("action")
-        installation_id = str(payload["installation"]["id"])
+        installation = db.query(Installation).filter(
+          Installation.installation_id == installation_id
+        ).first()
 
-        print("Repo change detected:", action, installation_id)
+        if installation:
+            background_tasks.add_task(sync_installation_repos, installation.id)
+            return {"ok": True}
+
+        if payload["action"] == "added":
+            for repo in payload["repositories_added"]:
+                upsert_repo(db, installation.id, repo)
+
+        elif payload["action"] == "removed":
+            for repo in payload["repositories_removed"]:
+                db.query(Repository).filter(
+                    Repository.full_name == repo["full_name"]
+                ).delete()
+
+            db.commit()
+
     elif event == "issues":
 
         action = payload.get("action")
@@ -230,7 +254,7 @@ def get_repos(
     if not installation:
         raise HTTPException(status_code=403, detail="Not allowed")
 
-    return get_installation_repos(installation_id)
+    return installation.repositories
 
 
 @router.get("/issues/{installation_id}/{owner}/{repo}/")
