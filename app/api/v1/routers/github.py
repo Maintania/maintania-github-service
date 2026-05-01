@@ -877,7 +877,7 @@ def sync_repo(payload: SyncRepoPayload):
 
 
 class RepoStatsRequest(BaseModel):
-    owner: str = Field(..., description="GitHub owner (required)")
+    # owner: str = Field(..., description="GitHub owner (required)")
     repo: Optional[str] = None
     branch: Optional[str] = None
     limit: int = Field(default=50, ge=1, le=500)
@@ -885,11 +885,11 @@ class RepoStatsRequest(BaseModel):
 
 
 @router.get("/repo-stats")
-def repo_stats(request: RepoStatsRequest, db: Session = Depends(get_db)):
+def repo_stats(request: RepoStatsRequest, db: Session = Depends(get_db), user = Depends(get_current_user)):
     engine = RepoIntelligenceEngine()
     engine.create_state_collection()
 
-    owner = request.owner
+    owner = user.username
     repo = request.repo
     branch = request.branch
     limit = request.limit or 10
