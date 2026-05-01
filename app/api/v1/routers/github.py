@@ -884,7 +884,7 @@ class RepoStatsRequest(BaseModel):
     offset: int = Field(default=0, ge=0)
 
 
-@router.get("/repo-stats")
+@router.post("/repo-stats")
 def repo_stats(request: RepoStatsRequest, db: Session = Depends(get_db), user = Depends(get_current_user)):
     engine = RepoIntelligenceEngine()
     engine.create_state_collection()
