@@ -68,10 +68,8 @@ async def callback(code: str, db: Session = Depends(get_db)):
             name=user_res.get("name"),
             avatar_url=user_res.get("avatar_url"),
             is_active=True,
-            is_verified=True,
-            domain=".comainter.com"   # 🔥 THIS IS THE FIX
-
-        )
+            is_verified=True
+            )
         db.add(user)
         db.commit()
         db.refresh(user)
@@ -91,7 +89,9 @@ async def callback(code: str, db: Session = Depends(get_db)):
         secure=False,          # REQUIRED for SameSite=None
         samesite="none",      # REQUIRED for cross-site
         path="/",
-        max_age=60 * 60 * 24
+        max_age=60 * 60 * 24,
+        domain=".comainter.com"   #  THIS IS THE FIX
+
     )
 
     return response
