@@ -86,7 +86,7 @@ async def callback(code: str, db: Session = Depends(get_db)):
         key="session",
         value=token,
         httponly=True,
-        secure=False,          # REQUIRED for SameSite=None
+        secure=True,          # REQUIRED for SameSite=None
         samesite="none",      # REQUIRED for cross-site
         path="/",
         max_age=60 * 60 * 24,
