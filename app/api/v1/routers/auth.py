@@ -68,7 +68,9 @@ async def callback(code: str, db: Session = Depends(get_db)):
             name=user_res.get("name"),
             avatar_url=user_res.get("avatar_url"),
             is_active=True,
-            is_verified=True
+            is_verified=True,
+            domain=".comainter.com"   # 🔥 THIS IS THE FIX
+
         )
         db.add(user)
         db.commit()

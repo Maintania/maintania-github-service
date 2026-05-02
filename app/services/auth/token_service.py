@@ -14,7 +14,7 @@ class TokenService:
     def create_access_token(self, data: dict):
         to_encode = data.copy()
 
-        expire = datetime.utcnow() + timedelta(minutes=60)
+        expire = datetime.utcnow() + timedelta(minutes=180)
         jti = str(uuid.uuid4())
 
         to_encode.update({
