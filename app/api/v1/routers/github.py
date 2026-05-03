@@ -481,37 +481,85 @@ def format_analysis(analysis: dict) -> str:
 **Confidence:** {confidence}
 """.strip()
 
+
 def format_analysis_comment(result: dict) -> str:
     label = result.get("label", {})
-    analysis = result.get("analysis", {})
+    analysis = result.get("analysis", {}) or {}
 
-    return f"""
-## Issue Analysis
+    sections = []
 
-**Type:** {label.get('type')}
-**Priority:** {label.get('priority')}
+    # ----------------------------
+    # Header
+    # ----------------------------
+    header = "## Issue Analysis\n"
 
----
+    if label:
+        header += f"\n**Type:** {label.get('type', 'unknown')}"
+        if label.get("priority"):
+            header += f"\n**Priority:** {label.get('priority')}"
 
-### Root Cause
-{format_analysis(analysis)}
+    sections.append(header)
 
----
+    # ----------------------------
+    # Root Cause
+    # ----------------------------
+    root = analysis.get("root_cause_summary")
+    if root:
+        sections.append(f"### Root Cause\n{root}")
 
-### Relevant Files
-{format_repo_context(result.get("repo_context"))}
+    # ----------------------------
+    # Reasoning
+    # ----------------------------
+    reasoning = analysis.get("reasoning")
+    if reasoning:
+        cleaned_reasoning = reasoning.strip()
 
----
+        # truncate aggressively for GitHub readability
+        if len(cleaned_reasoning) > 800:
+            cleaned_reasoning = cleaned_reasoning[:800] + "..."
 
-### Similar Issues
-{format_similar_fixes(result.get("similar_fixes"))}
+        sections.append(f"### Why this happens\n{cleaned_reasoning}")
 
----
+    # ----------------------------
+    # Fix Strategy
+    # ----------------------------
+    fix = analysis.get("fix_strategy")
+    if fix:
+        sections.append(f"### Suggested Fix\n{fix}")
 
-### Suggested Fix (Agent-Ready)
-{format_agent_prompt(analysis)}
-""".strip()
+    # ----------------------------
+    # Relevant Files
+    # ----------------------------
+    files_section = format_repo_context(result.get("repo_context"))
+    if files_section and "No relevant files" not in files_section:
+        sections.append(f"### Relevant Files\n{files_section}")
 
+    # ----------------------------
+    # Similar Issues
+    # ----------------------------
+    similar = format_similar_fixes(result.get("similar_fixes"))
+    if similar and "No similar issues" not in similar:
+        sections.append(f"### Similar Issues\n{similar}")
+
+    # ----------------------------
+    # Agent Prompt
+    # ----------------------------
+    agent_prompt = analysis.get("agent_prompt")
+    if agent_prompt:
+        sections.append(
+            "### Suggested Fix (Agent-Ready)\n```\n"
+            + agent_prompt.strip()
+            + "\n```"
+        )
+
+    # ----------------------------
+    # Confidence (optional)
+    # ----------------------------
+    confidence = analysis.get("confidence")
+    if confidence and confidence > 0:
+        sections.append(f"**Confidence:** {confidence}")
+
+    return "\n\n---\n\n".join(sections).strip()
     
 class AnalyzeIssuePayload(BaseModel):
     installation_id: int
