@@ -5,3 +5,4 @@ from .token_blacklist import TokenBlacklist
 from .installation import Installation
 from .repository import Repository
 from .issue import Issue
+from .syncjob import SyncJob

@@ -28,6 +28,7 @@ from fastapi import BackgroundTasks
 import os
 from app.models.issue import Issue
 from app.models.user import User
+from app.models.syncjob import SyncJob
 
 
 
@@ -64,17 +65,71 @@ def sync_all_repos_for_installation(installation_id: int):
                     branch=None,       # auto resolve
                     pr_number=None     # normal sync
                 )
-
+                print("started for: ", repo.full_name)
                 # 🔥 CALL YOUR EXISTING PIPELINE
                 sync_repo(payload)
+                print("Finished for: ", repo.full_name)
 
             except Exception as e:
                 print(f"[Sync Error] {repo.full_name}: {e}")
 
     finally:
         db.close()
-       
         
+def dispatch_sync_jobs(installation_id: int):
+    from app.db.session import SessionLocal
+    db = SessionLocal()
+
+    try:
+        jobs = db.query(SyncJob).filter(
+            SyncJob.installation_id == installation_id,
+            SyncJob.status == "PENDING"
+        ).all()
+        print(installation_id)
+        print(f"[Dispatcher] Found {len(jobs)} jobs")
+
+        for job in jobs:
+            try:
+                job.status = "RUNNING"
+                job.started_at = datetime.utcnow()
+                db.commit()
+
+                owner, repo_name = job.repo_full_name.split("/")
+
+                payload = SyncRepoPayload(
+                    installation_id=installation_id,
+                    owner=owner,
+                    repo=repo_name,
+                    branch=None,
+                    pr_number=None
+                )
+
+                print("started for: ", repo_name)
+                # 🔥 CALL YOUR EXISTING PIPELINE
+                sync_repo(payload)
+                print("Finished for: ", repo_name)
+
+                job.status = "SUCCESS"
+                job.progress = 100
+                job.finished_at = datetime.utcnow()
+
+                db.commit()
+
+            except Exception as e:
+                job.attempt += 1
+                job.error_message = str(e)
+
+                if job.attempt >= job.max_retries:
+                    job.status = "FAILED"
+                else:
+                    job.status = "PENDING"
+
+                db.commit()
+
+    finally:
+        db.close()
+ 
+       
 @router.get("/setup")
 def github_setup(
     installation_id: str,
@@ -82,7 +137,7 @@ def github_setup(
     db: Session = Depends(get_db),
     user: User = Depends(get_current_user)
 ):
-    # user_id = 1  # temp
+    
     user_id = user.id
 
     installation = db.query(Installation).filter(
@@ -101,7 +156,9 @@ def github_setup(
     # ✅ Step 1: fetch repos from GitHub
     response = get_installation_repos(installation_id)
     repos = response.get("repositories", [])
-    # ✅ Step 2: enforce uniqueness (IMPORTANT 🔥)
+
+    repo_ids = []
+
     for repo in repos:
         full_name = repo["full_name"]
 
@@ -111,13 +168,9 @@ def github_setup(
 
         if existing_repo:
             if existing_repo.installation_id != installation.id:
-                print(f"[Reassign Repo] {full_name}")
-
-                # ❌ delete old mapping
                 db.delete(existing_repo)
                 db.commit()
 
-        # ✅ upsert repo
         new_repo = Repository(
             installation_id=installation.id,
             name=repo["name"],
@@ -126,113 +179,353 @@ def github_setup(
         )
 
         db.merge(new_repo)
+        db.commit()
+
+        repo_ids.append(full_name)
 
     db.commit()
 
-    # ✅ Step 3: trigger background sync (incremental-safe)
+    # ✅ Step 2: CREATE SYNC JOBS (IMPORTANT CHANGE 🔥)
+    for full_name in repo_ids:
+
+        existing_job = db.query(SyncJob).filter(
+            SyncJob.repo_full_name == full_name,
+            SyncJob.installation_id == installation_id,
+            SyncJob.status.in_(["PENDING", "RUNNING"])
+        ).first()
+
+        if existing_job:
+            continue
+
+        job = SyncJob(
+            installation_id=installation_id,
+            repo_full_name=full_name,
+            status="PENDING",
+            progress=0,
+            attempt=0
+        )
+
+        db.add(job)
+
+    db.commit()
+
+    # ✅ Step 3: trigger worker dispatcher (NOT per repo sync anymore)
     background_tasks.add_task(
-        sync_all_repos_for_installation,
-        installation.id
+        dispatch_sync_jobs,
+        installation_id
     )
 
     return RedirectResponse(f"{settings.FRONTEND_URL}/repositeries")
 
 
+@router.get("/sync-jobs/{installation_id}")
+def get_sync_jobs(
+    installation_id: int,
+    db: Session = Depends(get_db),
+    user: User = Depends(get_current_user)
+):
+    jobs = db.query(SyncJob).filter(
+        SyncJob.installation_id == installation_id
+    ).order_by(SyncJob.created_at.desc()).all()
+
+    return [
+        {
+            "id": job.id,
+            "repo": job.repo_full_name,
+            "status": job.status,
+            "progress": job.progress,
+            "attempt": job.attempt,
+            "error": job.error_message,
+            "created_at": job.created_at,
+            "started_at": job.started_at,
+            "finished_at": job.finished_at,
+        }
+        for job in jobs
+    ]
+    
+
+@router.get("/sync-job/{job_id}")
+def get_sync_job_status(
+    job_id: int,
+    db: Session = Depends(get_db),
+    user: User = Depends(get_current_user)
+):
+    job = db.query(SyncJob).filter(
+        SyncJob.id == job_id
+    ).first()
+
+    if not job:
+        return {"error": "Job not found"}
+
+    return {
+        "id": job.id,
+        "installation_id": job.installation_id,
+        "repo": job.repo_full_name,
+        "status": job.status,
+        "progress": job.progress,
+        "attempt": job.attempt,
+        "error": job.error_message,
+        "created_at": job.created_at,
+        "started_at": job.started_at,
+        "finished_at": job.finished_at,
+    }
+    
+
+
+def create_initial_sync_jobs(db: Session, installation_db_id: int, github_installation_id: str):
+    """
+    Fetch repos from GitHub and create sync jobs.
+    Runs in background.
+    """
+
+    response = get_installation_repos(github_installation_id)
+    repos = response.get("repositories", [])
+
+    for repo in repos:
+        full_name = repo["full_name"]
+
+        existing_job = db.query(SyncJob).filter(
+            SyncJob.repo_full_name == full_name,
+            SyncJob.installation_id == installation_db_id,
+            SyncJob.status.in_(["PENDING", "RUNNING"])
+        ).first()
+
+        if existing_job:
+            continue
+
+        db.add(SyncJob(
+            installation_id=installation_db_id,
+            repo_full_name=full_name,
+            status="PENDING",
+            progress=0,
+            attempt=0
+        ))
+
+    db.commit()
+    
 
 @router.post("/webhook")
-async def github_webhook(request: Request,background_tasks: BackgroundTasks, db: Session = Depends(get_db)):
+async def github_webhook(
+    request: Request,
+    background_tasks: BackgroundTasks,
+    db: Session = Depends(get_db)
+):
 
-    raw_body = await request.body()
-    signature = request.headers.get("X-Hub-Signature-256")
-
-    if not verify_signature(raw_body, signature, settings.GITHUB_WEBHOOK_SECRET):
-        raise HTTPException(401, "Invalid signature")
-
+    
     payload = await request.json()
     event = request.headers.get("X-GitHub-Event")
 
-    installation_data = payload.get("installation")
-    installation_id = str(installation_data["id"]) if installation_data else None
+    if event == "installation":
 
-
-    # INSTALLATION CREATED
-
-    if event == "installation" and payload["action"] == "created":
-        installation = db.query(Installation).filter(
-            Installation.installation_id == installation_id
-        ).first()
+        action = payload.get("action")
+        installation = payload.get("installation")
 
         if not installation:
-            installation = Installation(
-                installation_id=installation_id,
-                account_login=installation_data["account"]["login"],
-                account_type=installation_data["account"]["type"]
+            return {"Status": 404, "Message": "No installation found"}
+
+        github_installation_id = str(installation["id"])
+        account = installation.get("account", {})
+
+        account_login = account.get("login")
+        account_type = account.get("type")
+
+        # -------------------------
+        # CREATED
+        # -------------------------
+        if action == "created":
+
+            existing = db.query(Installation).filter(
+                Installation.installation_id == github_installation_id
+            ).first()
+
+            if not existing:
+                existing = Installation(
+                    installation_id=github_installation_id,
+                    account_login=account_login,
+                    account_type=account_type
+                )
+                db.add(existing)
+                db.commit()
+                db.refresh(existing)
+
+            # trigger async repo sync job creation
+            background_tasks.add_task(
+                create_initial_sync_jobs,
+                db,
+                existing.id,
+                github_installation_id
             )
-            db.add(installation)
-            db.commit()
-            db.refresh(installation)
 
-       # async instead of blocking
-        background_tasks.add_task(sync_installation_repos, installation.id)
+        # -------------------------
+        # DELETED
+        # -------------------------
+        elif action == "deleted":
 
-  
-    # INSTALLATION DELETED
-    elif event == "installation" and payload["action"] == "deleted":
+            installation_row = db.query(Installation).filter(
+                Installation.installation_id == github_installation_id
+            ).first()
 
-        installation = db.query(Installation).filter(
-            Installation.installation_id == installation_id
-        ).first()
+            if installation_row:
 
-        if installation:
-            db.query(Repository).filter(
-                Repository.installation_id == installation.id
-            ).delete()
+                # soft-delete repos
+                db.query(Repository).filter(
+                    Repository.installation_id == installation_row.id
+                ).update({
+                    "is_deleted": True
+                }, synchronize_session=False)
 
-            db.delete(installation)
-            db.commit()
+                # delete installation
+                db.delete(installation_row)
 
-    # REPO ADDED/REMOVED
+                db.commit()
+
+        # -------------------------
+        # SUSPEND / UNSUSPEND
+        # -------------------------
+        elif action == "suspend":
+            print("Installation suspended:", github_installation_id)
+
+        elif action == "unsuspend":
+            print("Installation unsuspended:", github_installation_id)
+
+        return {"ok": True}
+
+
+    # =====================================================
+    # INSTALLATION REPOSITORIES EVENTS
+    # =====================================================
     elif event == "installation_repositories":
 
-        installation = db.query(Installation).filter(
-          Installation.installation_id == installation_id
-        ).first()
+        action = payload.get("action")
+        installation = payload.get("installation")
 
-        if installation:
-            background_tasks.add_task(sync_installation_repos, installation.id)
+        if not installation:
             return {"ok": True}
 
-        if payload["action"] == "added":
-            for repo in payload["repositories_added"]:
-                upsert_repo(db, installation.id, repo)
+        github_installation_id = str(installation["id"])
 
-        elif payload["action"] == "removed":
-            for repo in payload["repositories_removed"]:
-                db.query(Repository).filter(
-                    Repository.full_name == repo["full_name"]
-                ).delete()
+        installation_row = db.query(Installation).filter(
+            Installation.installation_id == github_installation_id
+        ).first()
+
+        if not installation_row:
+            return {"ok": True}
+
+        # -------------------------
+        # ADDED REPOS
+        # -------------------------
+        if action == "added":
+
+            repos_added = payload.get("repositories_added", [])
+
+            for repo in repos_added:
+
+                full_name = repo["full_name"]
+
+                existing_repo = db.query(Repository).filter(
+                    Repository.full_name == full_name,
+                    Repository.installation_id == installation_row.id
+                ).first()
+
+                if not existing_repo:
+                    db.add(Repository(
+                        github_repo_id=str(repo.get("id")),
+                        name=repo["name"],
+                        full_name=full_name,
+                        private=repo["private"],
+                        installation_id=installation_row.id,
+                        is_deleted=False
+                    ))
+
+                # create sync job
+                existing_job = db.query(SyncJob).filter(
+                    SyncJob.repo_full_name == full_name,
+                    SyncJob.installation_id == installation_row.id,
+                    SyncJob.status.in_(["PENDING", "RUNNING"])
+                ).first()
+
+                if not existing_job:
+                    db.add(SyncJob(
+                        installation_id=installation_row.id,
+                        repo_full_name=full_name,
+                        status="PENDING",
+                        progress=0,
+                        attempt=0
+                    ))
 
             db.commit()
 
+        # -------------------------
+        # REMOVED REPOS
+        # -------------------------
+        elif action == "removed":
+
+            repos_removed = payload.get("repositories_removed", [])
+
+            for repo in repos_removed:
+
+                full_name = repo["full_name"]
+
+                # soft delete repo
+                db.query(Repository).filter(
+                    Repository.full_name == full_name,
+                    Repository.installation_id == installation_row.id
+                ).update({
+                    "is_deleted": True
+                }, synchronize_session=False)
+
+                # cancel pending/running jobs
+                db.query(SyncJob).filter(
+                    SyncJob.repo_full_name == full_name,
+                    SyncJob.installation_id == installation_row.id,
+                    SyncJob.status.in_(["PENDING", "RUNNING"])
+                ).update({
+                    "status": "CANCELLED"
+                }, synchronize_session=False)
+
+            db.commit()
+
+        return {"ok": True}
+
+
+    # =====================================================
+    # ISSUES EVENTS
+    # =====================================================
     elif event == "issues":
 
         action = payload.get("action")
 
         if action == "opened":
 
-            installation_id = payload["installation"]["id"]
+            installation = payload.get("installation")
+            if not installation:
+                return {"ok": True}
+
+            github_installation_id = str(installation["id"])
+
+            installation_row = db.query(Installation).filter(
+                Installation.installation_id == github_installation_id
+            ).first()
+
+            if not installation_row:
+                return {"ok": True}
+
             issue_number = payload["issue"]["number"]
             repo_name = payload["repository"]["name"]
             owner = payload["repository"]["owner"]["login"]
             
+            # async-safe recommendation (better: queue this too)
             comment_on_issue(
-                installation_id,
+                github_installation_id,
                 owner,
                 repo_name,
                 issue_number,
                 "Issue received 👀 Maintania will analyze this."
             )
-        
+
+        return {"ok": True}
+
+
     return {"ok": True}
 
 
