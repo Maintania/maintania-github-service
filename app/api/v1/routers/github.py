@@ -429,25 +429,34 @@ def format_similar_fixes(similar_data: dict) -> str:
 
     return "\n".join(lines)
 
-
 def format_repo_context(repo_context: list) -> str:
     if not repo_context:
-        return "No relevant code identified."
+        return "No relevant files identified."
 
-    lines = []
+    seen = set()
+    files = []
 
-    for item in repo_context[:3]:  # limit aggressively
-        file = item.get("file", "unknown")
-        code = item.get("code", "")
+    for item in repo_context:
+        file = item.get("file")
+        if file and file not in seen:
+            seen.add(file)
+            files.append(file)
 
-        snippet = code.strip().replace("```", "")[:300]
+    if not files:
+        return "No relevant files identified."
 
-        lines.append(f"**{file}**")
-        lines.append("```ts")
-        lines.append(snippet)
-        lines.append("```")
+    return "\n".join([f"- {f}" for f in files[:5]])
 
-    return "\n\n".join(lines)
+
+def format_agent_prompt(analysis: dict) -> str:
+    prompt = analysis.get("agent_prompt")
+
+    if not prompt:
+        return "No fix instructions generated."
+
+    return f"""
+{prompt.strip()}
+""".strip()
 
 
 def format_analysis(analysis: dict) -> str:
@@ -464,7 +473,7 @@ def format_analysis(analysis: dict) -> str:
 {summary}
 
 **Why this happens**
-{reasoning[:800]}
+{reasoning[:600]}
 
 **Suggested Fix**
 {fix}
@@ -472,7 +481,6 @@ def format_analysis(analysis: dict) -> str:
 **Confidence:** {confidence}
 """.strip()
 
-    
 def format_analysis_comment(result: dict) -> str:
     label = result.get("label", {})
     analysis = result.get("analysis", {})
@@ -490,13 +498,18 @@ def format_analysis_comment(result: dict) -> str:
 
 ---
 
+### Relevant Files
+{format_repo_context(result.get("repo_context"))}
+
+---
+
 ### Similar Issues
 {format_similar_fixes(result.get("similar_fixes"))}
 
 ---
 
-### Relevant Code
-{format_repo_context(result.get("repo_context"))}
+### Suggested Fix (Agent-Ready)
+{format_agent_prompt(analysis)}
 """.strip()
 
     
