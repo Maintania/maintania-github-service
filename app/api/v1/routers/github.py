@@ -303,6 +303,241 @@ def create_initial_sync_jobs(db: Session, installation_db_id: int, github_instal
 
     db.commit()
     
+    
+class AnalyzeIssuePayload(BaseModel):
+    installation_id: int
+    owner: str
+    repo: str
+    issue_number: int
+    # issue_title: str
+    # issue_body: Optional[str] = ""
+
+def run_issue_analysis(payload: AnalyzeIssuePayload, db: Session):
+    start_time = time.time()
+
+    issue = github_get_issue_details(
+        installation_id=payload.installation_id,
+        owner=payload.owner,
+        repo=payload.repo,
+        issue_number=payload.issue_number
+    )
+
+    issue_title = issue["title"]
+    issue_body = issue["body"]
+
+    comments = github_get_issue_comments(
+        installation_id=payload.installation_id,
+        owner=payload.owner,
+        repo=payload.repo,
+        issue_number=payload.issue_number
+    )
+
+    comments_text = "\n\n".join([c["body"] for c in comments[:5]])
+
+    enriched_body = issue_body
+
+    classification = classify_issue(issue_title, enriched_body)
+
+    results = maintania_find_similar_fixes(
+        installation_id=payload.installation_id,
+        title=issue_title,
+        body=enriched_body,
+        owner=payload.owner,
+        repo=payload.repo,
+        issue_number=payload.issue_number,
+        top_k=10
+    )
+
+    query = f"""
+    Bug Report
+    Title:
+    {issue_title}
+
+    Description:
+    {enriched_body}
+
+    Find code responsible for this issue.
+    """
+
+    query_vector = embed([query])[0]
+    repo_full_name = f"{payload.owner}/{payload.repo}"
+
+    search_results = client.query_points(
+        collection_name="repo_code_embeddings",
+        query=query_vector,
+        limit=10,
+        query_filter=Filter(
+            must=[
+                FieldCondition(
+                    key="repo",
+                    match=MatchValue(value=repo_full_name)
+                )
+            ]
+        )
+    )
+
+    repo_context = [
+        {
+            "file": r.payload.get("file"),
+            "code": r.payload.get("code"),
+            "score": r.score
+        }
+        for r in search_results.points
+    ]
+
+    root_engine = RootCauseEngine()
+
+    analysis = root_engine.analyze(
+        issue_title,
+        enriched_body,
+        repo_context,
+        None
+    )
+
+    return {
+        "label": classification,
+        "issue_title": issue_title,
+        "analysis": analysis,
+        "similar_fixes": results,
+        "repo_context": repo_context
+    }
+    
+
+def format_similar_fixes(similar_data: dict) -> str:
+    if not similar_data:
+        return "No similar issues found."
+
+    duplicates = similar_data.get("duplicates", [])
+    similar = similar_data.get("similar_fixes", [])
+
+    lines = []
+
+    if duplicates:
+        lines.append("**Duplicates:**")
+        for d in duplicates[:5]:
+            lines.append(f"- #{d}")
+
+    if similar:
+        lines.append("\n**Related Issues:**")
+        for s in similar[:5]:
+            num = s.get("issue_number")
+            title = s.get("title", "")
+            lines.append(f"- #{num} {title}")
+
+    if not lines:
+        return "No similar issues found."
+
+    return "\n".join(lines)
+
+
+def format_repo_context(repo_context: list) -> str:
+    if not repo_context:
+        return "No relevant code identified."
+
+    lines = []
+
+    for item in repo_context[:3]:  # limit aggressively
+        file = item.get("file", "unknown")
+        code = item.get("code", "")
+
+        snippet = code.strip().replace("```", "")[:300]
+
+        lines.append(f"**{file}**")
+        lines.append("```ts")
+        lines.append(snippet)
+        lines.append("```")
+
+    return "\n\n".join(lines)
+
+
+def format_analysis(analysis: dict) -> str:
+    if not analysis:
+        return "Analysis unavailable."
+
+    summary = analysis.get("root_cause_summary", "")
+    reasoning = analysis.get("reasoning", "")
+    fix = analysis.get("fix_strategy", "")
+    confidence = analysis.get("confidence", "")
+
+    return f"""
+**Root Cause**
+{summary}
+
+**Why this happens**
+{reasoning[:800]}
+
+**Suggested Fix**
+{fix}
+
+**Confidence:** {confidence}
+""".strip()
+
+    
+def format_analysis_comment(result: dict) -> str:
+    label = result.get("label", {})
+    analysis = result.get("analysis", {})
+
+    return f"""
+## Issue Analysis
+
+**Type:** {label.get('type')}
+**Priority:** {label.get('priority')}
+
+---
+
+### Root Cause
+{format_analysis(analysis)}
+
+---
+
+### Similar Issues
+{format_similar_fixes(result.get("similar_fixes"))}
+
+---
+
+### Relevant Code
+{format_repo_context(result.get("repo_context"))}
+""".strip()
+
+    
+class AnalyzeIssuePayload(BaseModel):
+    installation_id: int
+    owner: str
+    repo: str
+    issue_number: int
+    # issue_title: str
+    # issue_body: Optional[str] = ""
+    
+def process_issue_background(payload: AnalyzeIssuePayload):
+    from app.db.session import SessionLocal
+    db = SessionLocal()
+
+    try:
+        result = run_issue_analysis(payload, db)
+
+        comment_body = format_analysis_comment(result)
+
+        comment_on_issue(
+            payload.installation_id,
+            payload.owner,
+            payload.repo,
+            payload.issue_number,
+            comment_body
+        )
+
+    except Exception as e:
+        comment_on_issue(
+            payload.installation_id,
+            payload.owner,
+            payload.repo,
+            payload.issue_number,
+            f"⚠️ Maintania failed to analyze this issue.\n\nError: {str(e)}"
+        )
+    finally:
+        db.close()
+        
+        
+        
 
 @router.post("/webhook")
 async def github_webhook(
@@ -491,8 +726,7 @@ async def github_webhook(
     # =====================================================
     # ISSUES EVENTS
     # =====================================================
-    elif event == "issues":
-
+    if event == "issues":
         action = payload.get("action")
 
         if action == "opened":
@@ -501,31 +735,37 @@ async def github_webhook(
             if not installation:
                 return {"ok": True}
 
-            github_installation_id = str(installation["id"])
-
-            installation_row = db.query(Installation).filter(
-                Installation.installation_id == github_installation_id
-            ).first()
-
-            if not installation_row:
-                return {"ok": True}
+            github_installation_id = int(installation["id"])
 
             issue_number = payload["issue"]["number"]
             repo_name = payload["repository"]["name"]
             owner = payload["repository"]["owner"]["login"]
-            
-            # async-safe recommendation (better: queue this too)
+
+            # 1️⃣ Instant feedback to user
             comment_on_issue(
                 github_installation_id,
                 owner,
                 repo_name,
                 issue_number,
-                "Issue received 👀 Maintania will analyze this."
+                "👀 Maintania is analyzing this issue... results will be posted shortly."
+            )
+
+            # 2️⃣ Prepare payload
+            analysis_payload = AnalyzeIssuePayload(
+                installation_id=github_installation_id,
+                owner=owner,
+                repo=repo_name,
+                issue_number=issue_number
+            )
+
+            # 3️⃣ Run in background
+            background_tasks.add_task(
+                process_issue_background,
+                analysis_payload
             )
 
         return {"ok": True}
-
-
+    
     return {"ok": True}
 
 
@@ -795,13 +1035,7 @@ def index_repository(request: RepoIndexRequest):
         engine.cleanup()
 
 
-class AnalyzeIssuePayload(BaseModel):
-    installation_id: int
-    owner: str
-    repo: str
-    issue_number: int
-    # issue_title: str
-    # issue_body: Optional[str] = ""
+
 
 
 @router.post("/analyze-issue")
