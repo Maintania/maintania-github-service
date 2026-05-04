@@ -501,45 +501,64 @@ def format_analysis_comment(result: dict) -> str:
     sections.append(header)
 
     # ----------------------------
-    # Root Cause
+    # Root Cause (ALWAYS VISIBLE)
     # ----------------------------
     root = analysis.get("root_cause_summary")
     if root:
         sections.append(f"### Root Cause\n{root}")
 
     # ----------------------------
-    # Reasoning
+    # Collapsible Sections Builder
+    # ----------------------------
+    def collapsible(title: str, content: str) -> str:
+        return f"""
+<details>
+<summary>{title}</summary>
+
+{content.strip()}
+
+</details>
+""".strip()
+
+    # ----------------------------
+    # Why this happens
     # ----------------------------
     reasoning = analysis.get("reasoning")
     if reasoning:
-        cleaned_reasoning = reasoning.strip()
+        cleaned = reasoning.strip()
+        if len(cleaned) > 800:
+            cleaned = cleaned[:800] + "..."
 
-        # truncate aggressively for GitHub readability
-        if len(cleaned_reasoning) > 800:
-            cleaned_reasoning = cleaned_reasoning[:800] + "..."
-
-        sections.append(f"### Why this happens\n{cleaned_reasoning}")
+        sections.append(
+            collapsible("Why this happens", cleaned)
+        )
 
     # ----------------------------
-    # Fix Strategy
+    # Suggested Fix
     # ----------------------------
     fix = analysis.get("fix_strategy")
     if fix:
-        sections.append(f"### Suggested Fix\n{fix}")
+        sections.append(
+            collapsible("Suggested Fix", fix)
+        )
 
     # ----------------------------
     # Relevant Files
     # ----------------------------
     files_section = format_repo_context(result.get("repo_context"))
     if files_section and "No relevant files" not in files_section:
-        sections.append(f"### Relevant Files\n{files_section}")
+        sections.append(
+            collapsible("Relevant Files", files_section)
+        )
 
     # ----------------------------
     # Similar Issues
     # ----------------------------
     similar = format_similar_fixes(result.get("similar_fixes"))
     if similar and "No similar issues" not in similar:
-        sections.append(f"### Similar Issues\n{similar}")
+        sections.append(
+            collapsible("Similar Issues", similar)
+        )
 
     # ----------------------------
     # Agent Prompt
@@ -547,19 +566,21 @@ def format_analysis_comment(result: dict) -> str:
     agent_prompt = analysis.get("agent_prompt")
     if agent_prompt:
         sections.append(
-            "### Suggested Fix (Agent-Ready)\n```\n"
-            + agent_prompt.strip()
-            + "\n```"
+            collapsible(
+                "Suggested Fix (Agent-Ready)",
+                f"```\n{agent_prompt.strip()}\n```"
+            )
         )
 
     # ----------------------------
-    # Confidence (optional)
+    # Confidence (inline, not collapsible)
     # ----------------------------
     confidence = analysis.get("confidence")
     if confidence and confidence > 0:
         sections.append(f"**Confidence:** {confidence}")
 
     return "\n\n---\n\n".join(sections).strip()
+
     
 class AnalyzeIssuePayload(BaseModel):
     installation_id: int
