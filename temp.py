@@ -155,14 +155,10 @@ def build_extension_sets(languages):
     for lang_name, data in languages.items():
         lang_type = data.get("type", "").lower()
         extensions = data.get("extensions", [])
-        
+
         # Logic / executable / source-code languages
         if lang_type == "programming":
             high_value.update(extensions)
-
-        elif extensions == ".xml":
-            high_value.update(extensions)
-
 
         # Structured config / schemas / markup
         elif lang_type == "prose":
@@ -179,11 +175,6 @@ HIGH_VALUE_EXTENSIONS, CONDITIONAL_EXTENSIONS, LOW_VALUE_EXTENSIONS = (
     build_extension_sets(linguist_data)
 )
 
-HIGH_VALUE_EXTENSIONS.add('.xml')
-
-LOW_VALUE_EXTENSIONS.discard('.xml')
-
-print(HIGH_VALUE_EXTENSIONS)
 class RepoIntelligenceEngine:
 
     def __init__(self):
@@ -402,9 +393,8 @@ class RepoIntelligenceEngine:
             for symbol in symbols:
 
                 chunks = self.chunk_symbol(
-                    symbol,
-                    symbol["start_line"],
-                    symbol['language']
+                    symbol["code"],
+                    symbol["start_line"]
                 )
 
                 for c in chunks:
@@ -416,12 +406,12 @@ class RepoIntelligenceEngine:
                         "language": language,
                         "symbol_type": symbol["type"],
                         "symbol_name": symbol["name"],
-                        "start_line": c["start_line"]
+                        "start_line": c["line"]
                     })
 
         # ---- FILE CHUNK PATH ----
         else:
-            file_chunks = self.chunk_file(full_path,language)
+            file_chunks = self.chunk_file(full_path)
 
             for chunk in file_chunks:
                 buffer_chunks.append(chunk)
@@ -561,8 +551,6 @@ class RepoIntelligenceEngine:
                 symbols.append({
                     "type": "import_block",
                     "name": "imports",
-                    "language": language,
-                    "file_path": file_path,
                     "start_line": import_start,
                     "end_line": import_end,
                     "code": "\n".join(imports)
@@ -738,8 +726,6 @@ class RepoIntelligenceEngine:
                 symbols.append({
                     "type": node.type,
                     "name": name,
-                    "language": language,
-                    "file_path": file_path,
                     "start_line":
                         node.start_point[0] + 1,
                     "end_line":
@@ -792,7 +778,6 @@ class RepoIntelligenceEngine:
 
                     final_chunks.append({
                         "type": "code_block",
-                        "language": language,
                         "name": f"block_{gap_start}",
                         "start_line": gap_start,
                         "end_line": gap_end,
@@ -823,8 +808,6 @@ class RepoIntelligenceEngine:
                 final_chunks.append({
                     "type": "code_block",
                     "name": f"block_{current_line}",
-                    "language": language,
-                    "file_path": file_path,
                     "start_line": current_line,
                     "end_line": len(all_lines),
                     "code": remaining_code
@@ -1088,9 +1071,6 @@ class RepoIntelligenceEngine:
                 })
 
         print("FILES BEFORE FILTER:", len(repo_map["files"]))
-        print(repo_map["files"])
-        with open('test_resp copy.json', 'a') as f:
-            json.dump(repo_map, f, indent=2)
 
         # -----------------------------
         # STEP 2: EXTENSION FILTER
@@ -1123,8 +1103,6 @@ class RepoIntelligenceEngine:
                 filtered_files.append(f)
 
         repo_map["files"] = filtered_files
-        with open('test_resp copy.json', 'a') as f:
-            json.dump(repo_map, f, indent=2)
 
         print("FILES AFTER FILTER:", len(repo_map["files"]))
 
@@ -1582,32 +1560,32 @@ class RepoIntelligenceEngine:
             shutil.rmtree(self.temp_dir, ignore_errors=True)
 
 
-# repo = RepoIntelligenceEngine()
+repo = RepoIntelligenceEngine()
 
-# stats, success = repo.process_repository(
-#             owner='nimeshchandegra',
-#             repo='BudgetApp',
-#             branch=''
-#         )
+stats, success = repo.process_repository(
+            owner='nimeshchandegra',
+            repo='BudgetApp',
+            branch=''
+        )
 
-# print(stats, success)
-# # file_path = r'C:\Users\LENOVO\Desktop\eslint.config.js'
-# # language = "javascript"
-# # symbol = repo.extract_symbols(file_path,language)
+print(stats, success)
+# file_path = r'C:\Users\LENOVO\Desktop\eslint.config.js'
+# language = "javascript"
+# symbol = repo.extract_symbols(file_path,language)
 
-# # # print(symbol)
+# # print(symbol)
 
-# # chunks = repo.chunk_file(
-# #     file_path,
-# #     language
-# # )
+# chunks = repo.chunk_file(
+#     file_path,
+#     language
+# )
 
-# # texts = [
-# #     c["text"]
-# #     for c in chunks
-# # ]
+# texts = [
+#     c["text"]
+#     for c in chunks
+# ]
 
-# # # embeddings = model.encode(texts)
+# # embeddings = model.encode(texts)
 
-# # with open ('test_resp copy.json', 'w') as f:
-# #     json.dump(chunks, f)
+# with open ('test_resp copy.json', 'w') as f:
+#     json.dump(chunks, f)

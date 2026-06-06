@@ -1,0 +1,584 @@
+[
+  { "path": "client\\.gitignore", "language": "unknown", "size": 521 },
+  {
+    "path": "client\\eslint.config.mjs",
+    "language": "javascript",
+    "size": 409
+  },
+  { "path": "client\\next.config.ts", "language": "xml", "size": 140 },
+  { "path": "client\\package.json", "language": "oasv3-json", "size": 741 },
+  {
+    "path": "client\\postcss.config.mjs",
+    "language": "javascript",
+    "size": 86
+  },
+  { "path": "client\\tsconfig.json", "language": "oasv3-json", "size": 629 },
+  { "path": "client\\public\\file.svg", "language": "svg", "size": 391 },
+  { "path": "client\\public\\globe.svg", "language": "svg", "size": 1035 },
+  { "path": "client\\public\\next.svg", "language": "svg", "size": 1375 },
+  { "path": "client\\public\\vercel.svg", "language": "svg", "size": 128 },
+  { "path": "client\\public\\window.svg", "language": "svg", "size": 385 },
+  { "path": "client\\src\\app\\globals.css", "language": "css", "size": 514 },
+  { "path": "client\\src\\app\\layout.tsx", "language": "xml", "size": 723 },
+  { "path": "client\\src\\app\\page.tsx", "language": "xml", "size": 1390 },
+  {
+    "path": "client\\src\\app\\stream\\page.tsx",
+    "language": "xml",
+    "size": 16319
+  },
+  {
+    "path": "client\\src\\app\\watch\\page.tsx",
+    "language": "xml",
+    "size": 3634
+  },
+  {
+    "path": "client\\src\\component\\navbar.tsx",
+    "language": "xml",
+    "size": 117
+  },
+  {
+    "path": "mediasoup-server\\.gitignore",
+    "language": "unknown",
+    "size": 1018
+  },
+  {
+    "path": "mediasoup-server\\docker-compose.yml",
+    "language": "yaml",
+    "size": 763
+  },
+  {
+    "path": "mediasoup-server\\ffmpeg-worker\\.dockerignore",
+    "language": "unknown",
+    "size": 50
+  },
+  {
+    "path": "mediasoup-server\\ffmpeg-worker\\.gitignore",
+    "language": "unknown",
+    "size": 519
+  },
+  {
+    "path": "mediasoup-server\\ffmpeg-worker\\dockerfile",
+    "language": "unknown",
+    "size": 445
+  },
+  {
+    "path": "mediasoup-server\\ffmpeg-worker\\package.json",
+    "language": "oasv3-json",
+    "size": 442
+  },
+  {
+    "path": "mediasoup-server\\ffmpeg-worker\\tsconfig.json",
+    "language": "oasv3-json",
+    "size": 183
+  },
+  {
+    "path": "mediasoup-server\\ffmpeg-worker\\src\\index.ts",
+    "language": "xml",
+    "size": 4643
+  },
+  {
+    "path": "mediasoup-server\\mediasoup-app\\.dockerignore",
+    "language": "unknown",
+    "size": 50
+  },
+  {
+    "path": "mediasoup-server\\mediasoup-app\\.gitignore",
+    "language": "unknown",
+    "size": 458
+  },
+  {
+    "path": "mediasoup-server\\mediasoup-app\\dockerfile",
+    "language": "unknown",
+    "size": 408
+  },
+  {
+    "path": "mediasoup-server\\mediasoup-app\\package.json",
+    "language": "oasv3-json",
+    "size": 515
+  },
+  {
+    "path": "mediasoup-server\\mediasoup-app\\tsconfig.json",
+    "language": "oasv3-json",
+    "size": 185
+  },
+  {
+    "path": "mediasoup-server\\mediasoup-app\\src\\index.ts",
+    "language": "xml",
+    "size": 1433
+  },
+  {
+    "path": "mediasoup-server\\mediasoup-app\\src\\common\\pipeTransport.ts",
+    "language": "xml",
+    "size": 1248
+  },
+  {
+    "path": "mediasoup-server\\mediasoup-app\\src\\common\\worker.ts",
+    "language": "xml",
+    "size": 558
+  },
+  {
+    "path": "mediasoup-server\\mediasoup-app\\src\\config\\medisoup.config.ts",
+    "language": "xml",
+    "size": 974
+  },
+  {
+    "path": "mediasoup-server\\mediasoup-app\\src\\config\\socket.config.ts",
+    "language": "xml",
+    "size": 213
+  },
+  {
+    "path": "mediasoup-server\\mediasoup-app\\src\\controller\\hls.controller.ts",
+    "language": "xml",
+    "size": 4415
+  },
+  {
+    "path": "mediasoup-server\\mediasoup-app\\src\\controller\\mediasoup.controller.ts",
+    "language": "xml",
+    "size": 3630
+  },
+  {
+    "path": "mediasoup-server\\mediasoup-app\\src\\service\\hls.service.ts",
+    "language": "xml",
+    "size": 660
+  },
+  {
+    "path": "mediasoup-server\\mediasoup-app\\src\\service\\mediasoup.service.ts",
+    "language": "xml",
+    "size": 3611
+  }
+]
+{
+  "repo": "guptadeepak8/meets",
+  "branch": "main",
+  "last_commit": null,
+  "files": [
+    {
+      "path": "client\\.gitignore",
+      "language": "unknown",
+      "size": 521
+    },
+    {
+      "path": "client\\eslint.config.mjs",
+      "language": "javascript",
+      "size": 409
+    },
+    {
+      "path": "client\\next.config.ts",
+      "language": "xml",
+      "size": 140
+    },
+    {
+      "path": "client\\package.json",
+      "language": "oasv3-json",
+      "size": 741
+    },
+    {
+      "path": "client\\postcss.config.mjs",
+      "language": "javascript",
+      "size": 86
+    },
+    {
+      "path": "client\\tsconfig.json",
+      "language": "oasv3-json",
+      "size": 629
+    },
+    {
+      "path": "client\\public\\file.svg",
+      "language": "svg",
+      "size": 391
+    },
+    {
+      "path": "client\\public\\globe.svg",
+      "language": "svg",
+      "size": 1035
+    },
+    {
+      "path": "client\\public\\next.svg",
+      "language": "svg",
+      "size": 1375
+    },
+    {
+      "path": "client\\public\\vercel.svg",
+      "language": "svg",
+      "size": 128
+    },
+    {
+      "path": "client\\public\\window.svg",
+      "language": "svg",
+      "size": 385
+    },
+    {
+      "path": "client\\src\\app\\globals.css",
+      "language": "css",
+      "size": 514
+    },
+    {
+      "path": "client\\src\\app\\layout.tsx",
+      "language": "xml",
+      "size": 723
+    },
+    {
+      "path": "client\\src\\app\\page.tsx",
+      "language": "xml",
+      "size": 1390
+    },
+    {
+      "path": "client\\src\\app\\stream\\page.tsx",
+      "language": "xml",
+      "size": 16319
+    },
+    {
+      "path": "client\\src\\app\\watch\\page.tsx",
+      "language": "xml",
+      "size": 3634
+    },
+    {
+      "path": "client\\src\\component\\navbar.tsx",
+      "language": "xml",
+      "size": 117
+    },
+    {
+      "path": "mediasoup-server\\.gitignore",
+      "language": "unknown",
+      "size": 1018
+    },
+    {
+      "path": "mediasoup-server\\docker-compose.yml",
+      "language": "yaml",
+      "size": 763
+    },
+    {
+      "path": "mediasoup-server\\ffmpeg-worker\\.dockerignore",
+      "language": "unknown",
+      "size": 50
+    },
+    {
+      "path": "mediasoup-server\\ffmpeg-worker\\.gitignore",
+      "language": "unknown",
+      "size": 519
+    },
+    {
+      "path": "mediasoup-server\\ffmpeg-worker\\dockerfile",
+      "language": "unknown",
+      "size": 445
+    },
+    {
+      "path": "mediasoup-server\\ffmpeg-worker\\package.json",
+      "language": "oasv3-json",
+      "size": 442
+    },
+    {
+      "path": "mediasoup-server\\ffmpeg-worker\\tsconfig.json",
+      "language": "oasv3-json",
+      "size": 183
+    },
+    {
+      "path": "mediasoup-server\\ffmpeg-worker\\src\\index.ts",
+      "language": "xml",
+      "size": 4643
+    },
+    {
+      "path": "mediasoup-server\\mediasoup-app\\.dockerignore",
+      "language": "unknown",
+      "size": 50
+    },
+    {
+      "path": "mediasoup-server\\mediasoup-app\\.gitignore",
+      "language": "unknown",
+      "size": 458
+    },
+    {
+      "path": "mediasoup-server\\mediasoup-app\\dockerfile",
+      "language": "unknown",
+      "size": 408
+    },
+    {
+      "path": "mediasoup-server\\mediasoup-app\\package.json",
+      "language": "oasv3-json",
+      "size": 515
+    },
+    {
+      "path": "mediasoup-server\\mediasoup-app\\tsconfig.json",
+      "language": "oasv3-json",
+      "size": 185
+    },
+    {
+      "path": "mediasoup-server\\mediasoup-app\\src\\index.ts",
+      "language": "xml",
+      "size": 1433
+    },
+    {
+      "path": "mediasoup-server\\mediasoup-app\\src\\common\\pipeTransport.ts",
+      "language": "xml",
+      "size": 1248
+    },
+    {
+      "path": "mediasoup-server\\mediasoup-app\\src\\common\\worker.ts",
+      "language": "xml",
+      "size": 558
+    },
+    {
+      "path": "mediasoup-server\\mediasoup-app\\src\\config\\medisoup.config.ts",
+      "language": "xml",
+      "size": 974
+    },
+    {
+      "path": "mediasoup-server\\mediasoup-app\\src\\config\\socket.config.ts",
+      "language": "xml",
+      "size": 213
+    },
+    {
+      "path": "mediasoup-server\\mediasoup-app\\src\\controller\\hls.controller.ts",
+      "language": "xml",
+      "size": 4415
+    },
+    {
+      "path": "mediasoup-server\\mediasoup-app\\src\\controller\\mediasoup.controller.ts",
+      "language": "xml",
+      "size": 3630
+    },
+    {
+      "path": "mediasoup-server\\mediasoup-app\\src\\service\\hls.service.ts",
+      "language": "xml",
+      "size": 660
+    },
+    {
+      "path": "mediasoup-server\\mediasoup-app\\src\\service\\mediasoup.service.ts",
+      "language": "xml",
+      "size": 3611
+    }
+  ]
+}{
+  "repo": "guptadeepak8/meets",
+  "branch": "main",
+  "last_commit": null,
+  "files": [
+    {
+      "path": "client\\eslint.config.mjs",
+      "language": "javascript",
+      "size": 409
+    },
+    {
+      "path": "client\\postcss.config.mjs",
+      "language": "javascript",
+      "size": 86
+    }
+  ]
+}{
+  "repo": "guptadeepak8/meets",
+  "branch": "main",
+  "last_commit": null,
+  "files": [
+    {
+      "path": "client\\.gitignore",
+      "language": "unknown",
+      "size": 521
+    },
+    {
+      "path": "client\\eslint.config.mjs",
+      "language": "javascript",
+      "size": 409
+    },
+    {
+      "path": "client\\next.config.ts",
+      "language": "xml",
+      "size": 140
+    },
+    {
+      "path": "client\\package.json",
+      "language": "oasv3-json",
+      "size": 741
+    },
+    {
+      "path": "client\\postcss.config.mjs",
+      "language": "javascript",
+      "size": 86
+    },
+    {
+      "path": "client\\tsconfig.json",
+      "language": "oasv3-json",
+      "size": 629
+    },
+    {
+      "path": "client\\public\\file.svg",
+      "language": "svg",
+      "size": 391
+    },
+    {
+      "path": "client\\public\\globe.svg",
+      "language": "svg",
+      "size": 1035
+    },
+    {
+      "path": "client\\public\\next.svg",
+      "language": "svg",
+      "size": 1375
+    },
+    {
+      "path": "client\\public\\vercel.svg",
+      "language": "svg",
+      "size": 128
+    },
+    {
+      "path": "client\\public\\window.svg",
+      "language": "svg",
+      "size": 385
+    },
+    {
+      "path": "client\\src\\app\\globals.css",
+      "language": "css",
+      "size": 514
+    },
+    {
+      "path": "client\\src\\app\\layout.tsx",
+      "language": "xml",
+      "size": 723
+    },
+    {
+      "path": "client\\src\\app\\page.tsx",
+      "language": "xml",
+      "size": 1390
+    },
+    {
+      "path": "client\\src\\app\\stream\\page.tsx",
+      "language": "xml",
+      "size": 16319
+    },
+    {
+      "path": "client\\src\\app\\watch\\page.tsx",
+      "language": "xml",
+      "size": 3634
+    },
+    {
+      "path": "client\\src\\component\\navbar.tsx",
+      "language": "xml",
+      "size": 117
+    },
+    {
+      "path": "mediasoup-server\\.gitignore",
+      "language": "unknown",
+      "size": 1018
+    },
+    {
+      "path": "mediasoup-server\\docker-compose.yml",
+      "language": "yaml",
+      "size": 763
+    },
+    {
+      "path": "mediasoup-server\\ffmpeg-worker\\.dockerignore",
+      "language": "unknown",
+      "size": 50
+    },
+    {
+      "path": "mediasoup-server\\ffmpeg-worker\\.gitignore",
+      "language": "unknown",
+      "size": 519
+    },
+    {
+      "path": "mediasoup-server\\ffmpeg-worker\\dockerfile",
+      "language": "unknown",
+      "size": 445
+    },
+    {
+      "path": "mediasoup-server\\ffmpeg-worker\\package.json",
+      "language": "oasv3-json",
+      "size": 442
+    },
+    {
+      "path": "mediasoup-server\\ffmpeg-worker\\tsconfig.json",
+      "language": "oasv3-json",
+      "size": 183
+    },
+    {
+      "path": "mediasoup-server\\ffmpeg-worker\\src\\index.ts",
+      "language": "xml",
+      "size": 4643
+    },
+    {
+      "path": "mediasoup-server\\mediasoup-app\\.dockerignore",
+      "language": "unknown",
+      "size": 50
+    },
+    {
+      "path": "mediasoup-server\\mediasoup-app\\.gitignore",
+      "language": "unknown",
+      "size": 458
+    },
+    {
+      "path": "mediasoup-server\\mediasoup-app\\dockerfile",
+      "language": "unknown",
+      "size": 408
+    },
+    {
+      "path": "mediasoup-server\\mediasoup-app\\package.json",
+      "language": "oasv3-json",
+      "size": 515
+    },
+    {
+      "path": "mediasoup-server\\mediasoup-app\\tsconfig.json",
+      "language": "oasv3-json",
+      "size": 185
+    },
+    {
+      "path": "mediasoup-server\\mediasoup-app\\src\\index.ts",
+      "language": "xml",
+      "size": 1433
+    },
+    {
+      "path": "mediasoup-server\\mediasoup-app\\src\\common\\pipeTransport.ts",
+      "language": "xml",
+      "size": 1248
+    },
+    {
+      "path": "mediasoup-server\\mediasoup-app\\src\\common\\worker.ts",
+      "language": "xml",
+      "size": 558
+    },
+    {
+      "path": "mediasoup-server\\mediasoup-app\\src\\config\\medisoup.config.ts",
+      "language": "xml",
+      "size": 974
+    },
+    {
+      "path": "mediasoup-server\\mediasoup-app\\src\\config\\socket.config.ts",
+      "language": "xml",
+      "size": 213
+    },
+    {
+      "path": "mediasoup-server\\mediasoup-app\\src\\controller\\hls.controller.ts",
+      "language": "xml",
+      "size": 4415
+    },
+    {
+      "path": "mediasoup-server\\mediasoup-app\\src\\controller\\mediasoup.controller.ts",
+      "language": "xml",
+      "size": 3630
+    },
+    {
+      "path": "mediasoup-server\\mediasoup-app\\src\\service\\hls.service.ts",
+      "language": "xml",
+      "size": 660
+    },
+    {
+      "path": "mediasoup-server\\mediasoup-app\\src\\service\\mediasoup.service.ts",
+      "language": "xml",
+      "size": 3611
+    }
+  ]
+}{
+  "repo": "guptadeepak8/meets",
+  "branch": "main",
+  "last_commit": null,
+  "files": [
+    {
+      "path": "client\\eslint.config.mjs",
+      "language": "javascript",
+      "size": 409
+    },
+    {
+      "path": "client\\postcss.config.mjs",
+      "language": "javascript",
+      "size": 86
+    }
+  ]
+}

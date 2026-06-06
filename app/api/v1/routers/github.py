@@ -995,103 +995,105 @@ def index_repository(request: RepoIndexRequest):
                 "repo": f"{request.owner}/{request.repo}"
             }
 
-    try:
+    # try:
 
-        start_time = time.time()
-        target_branch = request.branch
-        if not request.branch:
-            branch_name = engine.resolve_branch(
-                owner=request.owner,
-                repo=request.repo,
-                installation_id=request.installation_id,
-                branch=request.branch
-            )
-        else:
-            branch_name = target_branch
-            
-        print("Branch:", branch_name)
-            
-            
-        existing_state = engine.get_repo_state(
-            owner=request.owner,
-            repo=request.repo,
-            branch=branch_name
-        )
-
-        # -----------------------------------
-        # IF EXISTS → CALL SYNC (INCREMENTAL)
-        # -----------------------------------
-        if existing_state and existing_state.get("last_commit"):
-
-            print("Repo already indexed → running incremental sync")
-
-            return sync_repo(SyncRepoPayload(
-                installation_id=request.installation_id,
-                owner=request.owner,
-                repo=request.repo,
-                branch=branch_name
-            ))
-        
-        # Clone repository
-        branch = engine.clone_repo(
+    start_time = time.time()
+    target_branch = request.branch
+    if not request.branch:
+        branch_name = engine.resolve_branch(
             owner=request.owner,
             repo=request.repo,
             installation_id=request.installation_id,
+            branch=request.branch
+        )
+    else:
+        branch_name = target_branch
+        
+    print("Branch:", branch_name)
+        
+        
+    existing_state = engine.get_repo_state(
+        owner=request.owner,
+        repo=request.repo,
+        branch=branch_name
+    )
+
+    # -----------------------------------
+    # IF EXISTS → CALL SYNC (INCREMENTAL)
+    # -----------------------------------
+    if existing_state and existing_state.get("last_commit"):
+
+        print("Repo already indexed → running incremental sync")
+
+        return sync_repo(SyncRepoPayload(
+            installation_id=request.installation_id,
+            owner=request.owner,
+            repo=request.repo,
             branch=branch_name
-        )
+        ))
+    
+    # Clone repository
+    branch = engine.clone_repo(
+        owner=request.owner,
+        repo=request.repo,
+        installation_id=request.installation_id,
+        branch=branch_name
+    )
 
-        engine.upsert_repo_state(
-            owner=request.owner,
-            repo=request.repo,
-            branch=branch,
-            data={
-                "status": "indexing",
-                "last_update_type": "full",
-                "error": None
-            }
-        )
-
-        # Process and store embeddings
-        stats, success = engine.process_repository(
-            owner=request.owner,
-            repo=request.repo,
-            branch=branch
-        )
-        repo_obj = Repo(engine.repo_root)
-        current_commit = repo_obj.head.commit.hexsha
-
-        engine.upsert_repo_state(
-            owner=request.owner,
-            repo=request.repo,
-            branch=branch,
-            data={
-                "last_commit": current_commit,
-                "total_files": stats["total_files"],
-                "total_chunks": stats["total_chunks"],
-                "languages": stats["languages"],
-                "last_indexed_at": engine._utc_now_iso(),
-                "last_index_duration_sec": stats["duration_sec"],
-                "status": "ready",
-                "last_update_type": "full",
-                "error": None
-            }
-        )
-
-        if not success:
-            raise HTTPException(
-                status_code=400,
-                detail="No supported files found in repository"
-            )
-
-        return {
-            "status": "success",
-            "message": "Repository indexed successfully",
-            "repository": f"{request.owner}/{request.repo}",
-            "branch": branch,
-            "chunks_indexed": stats["total_chunks"],
-            "index_time_seconds": round(time.time() - start_time, 2)
+    engine.upsert_repo_state(
+        owner=request.owner,
+        repo=request.repo,
+        branch=branch,
+        data={
+            "status": "indexing",
+            "last_update_type": "full",
+            "error": None
         }
+    )
 
+    # Process and store embeddings
+    stats, success = engine.process_repository(
+        owner=request.owner,
+        repo=request.repo,
+        branch=branch
+    )
+    repo_obj = Repo(engine.repo_root)
+    current_commit = repo_obj.head.commit.hexsha
+
+    engine.upsert_repo_state(
+        owner=request.owner,
+        repo=request.repo,
+        branch=branch,
+        data={
+            "last_commit": current_commit,
+            "total_files": stats["total_files"],
+            "total_chunks": stats["total_chunks"],
+            "languages": stats["languages"],
+            "last_indexed_at": engine._utc_now_iso(),
+            "last_index_duration_sec": stats["duration_sec"],
+            "status": "ready",
+            "last_update_type": "full",
+            "error": None
+        }
+    )
+
+    if not success:
+        raise HTTPException(
+            status_code=400,
+            detail="No supported files found in repository"
+        )
+
+    return {
+        "status": "success",
+        "message": "Repository indexed successfully",
+        "repository": f"{request.owner}/{request.repo}",
+        "branch": branch,
+        "chunks_indexed": stats["total_chunks"],
+        "index_time_seconds": round(time.time() - start_time, 2)
+    }
+    try:
+        print('intry')
+        
     except Exception as e:
 
         if 'branch' in locals():
@@ -1135,6 +1137,8 @@ def test_maintania_pipeline(payload: AnalyzeIssuePayload, db: Session = Depends(
         repo=payload.repo,
         issue_number=payload.issue_number
     )
+    with open ('test_resp copy.json', 'a') as f:
+        json.dump(issue, f)
 
     issue_title = issue["title"]
     issue_body = issue["body"]
@@ -1152,16 +1156,16 @@ def test_maintania_pipeline(payload: AnalyzeIssuePayload, db: Session = Depends(
         [c["body"] for c in comments[:5]]
     )
 
-    # enriched_body = f"""
-    # {issue_body}
-
-    # --- Comments ---
-    # {comments_text}
-    # """
-    
     enriched_body = f"""
     {issue_body}
+
+    --- Comments ---
+    {comments_text}
     """
+    
+    # enriched_body = f"""
+    # {issue_body}
+    # """
 
     # ----------------------------
     # Phase 1 — Issue Classification
@@ -1180,6 +1184,9 @@ def test_maintania_pipeline(payload: AnalyzeIssuePayload, db: Session = Depends(
         issue_number=payload.issue_number,
         top_k=10
     )
+    
+    with open ('test_resp copy.json', 'a') as f:
+        json.dump(results, f)
 
     # ----------------------------
     # Phase 3 — Retrieve Relevant Code From Vector DB
@@ -1235,7 +1242,9 @@ def test_maintania_pipeline(payload: AnalyzeIssuePayload, db: Session = Depends(
     )
     end_time = time.time()
     fetch_time_ms = (end_time - start_time) * 1000    
-    
+    with open ('test_resp copy.json', 'a') as f:
+        json.dump(repo_context, f)
+        json.dump(analysis, f)
     # ----------------------------
     # 💾 SAVE TO DB
     # ----------------------------

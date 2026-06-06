@@ -86,11 +86,11 @@ async def callback(code: str, db: Session = Depends(get_db)):
         key="session",
         value=token,
         httponly=True,
-        secure=True,          # REQUIRED for SameSite=None
-        samesite="none",      # REQUIRED for cross-site
+        secure=False,          # REQUIRED for SameSite=None
+        samesite="lax",      # REQUIRED for cross-site AssertionError: samesite must be either 'strict', 'lax' or 'none'
         path="/",
         max_age=60 * 60 * 24,
-        domain=".comainter.com"   #  THIS IS THE FIX
+        # domain=".comainter.com"   #  THIS IS THE FIX
 
     )
 
